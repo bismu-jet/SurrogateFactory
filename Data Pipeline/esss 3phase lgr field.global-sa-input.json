@@ -1,0 +1,49 @@
+{
+    "input_metrics":[
+        {
+            "InternalOptimizerDiscreteValues":{
+                "caption":"Regions - Formation Water",
+                "id":{
+                    "attr_key":null,
+                    "attribute":"formation_water_id",
+                    "element_id":"project.regions"
+                },
+                "type":"discrete",
+                "valid_values":[
+                    "Shallow Reservoir",
+                    "Deep Reservoir"
+                ]
+            }
+        },
+        {
+            "InternalOptimizerDiscreteValues":{
+                "caption":"Period 1 - Water",
+                "id":{
+                    "attr_key":null,
+                    "attribute":"fluid_id",
+                    "element_id":"project.water_injection_schedule.injection_periods00001.injection_period00001"
+                },
+                "type":"discrete",
+                "valid_values":[
+                    "Seawater",
+                    "Sour Water"
+                ]
+            }
+        },
+        {
+            "InternalOptimizerDiscreteValues":{
+                "caption":"Period 1 - Water",
+                "id":{
+                    "attr_key":null,
+                    "attribute":"fluid_id",
+                    "element_id":"project.water_injection_schedule.injection_periods00002.injection_period00001"
+                },
+                "type":"discrete",
+                "valid_values":[
+                    "Seawater",
+                    "Sour Water"
+                ]
+            }
+        }
+    ]
+}
