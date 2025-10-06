@@ -91,14 +91,12 @@ def load_data(
     Returns:
         Uma tupla contendo o DataFrame unificado e os metadados.
     """
-    # 1. Carrega as features e os metadados
     df_features = _parse_run_specs(run_specs_path)
     variable_metadata = _parse_variable_metadata(metadata_path)
     
     if df_features.empty:
         return pd.DataFrame(), {}
         
-    # 2. Loop para coletar os resultados (Y) de cada run
     project_name = run_specs_path.stem.replace('.runs-specs', '')
     all_y_vectors = []
     
@@ -110,7 +108,6 @@ def load_data(
         y_vector = _parse_single_sa_summary(result_file_path)
         all_y_vectors.append(y_vector)
         
-    # 3. Adiciona os vetores de saída ao DataFrame de features
     df_features['outputs'] = all_y_vectors
     
     # Filtra runs que não tiveram um arquivo de resultado correspondente
