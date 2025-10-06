@@ -1,39 +1,24 @@
-# Arquivo .gitignore para projetos Python
 
-# 1. Ambiente Virtual
-# Ignora a pasta do ambiente virtual, que contém os pacotes instalados.
 venv/
 *.env
 .env
 
-# 2. Cache e arquivos compilados do Python
-# O Python cria essas pastas e arquivos para acelerar a execução.
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 
-# 3. Arquivos de Configuração de IDEs e Editores
-# Ignora as configurações específicas do seu editor de código.
 .vscode/
 .idea/
 
-# 4. Arquivos de Build e Distribuição
-# Gerados quando você empacota sua biblioteca para distribuição.
 build/
 dist/
 *.egg-info/
 *.egg
 
-# 5. Arquivos de Teste
-# Caches e relatórios gerados por ferramentas de teste como o pytest.
 .pytest_cache/
 .coverage
 htmlcov/
 
-Data Pipeline/
-
-# 6. Arquivos gerados pelo Sistema Operacional
-# Arquivos de sistema que não pertencem ao projeto.
 .DS_Store  # macOS
 Thumbs.db  # Windows
