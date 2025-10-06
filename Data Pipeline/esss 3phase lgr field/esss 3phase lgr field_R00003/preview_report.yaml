@@ -1,0 +1,6 @@
+project_name: result
+injector_wells_report:
+reservoirs_ph_range:
+injection_waters_imbalance_report: []
+formation_waters_imbalance_report: []
+aqueous_component_for_charge_balance: ''
