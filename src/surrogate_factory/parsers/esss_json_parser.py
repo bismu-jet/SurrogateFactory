@@ -43,66 +43,77 @@ def _flatten_run_data(df: pd.DataFrame) -> pd.DataFrame:
     
     return pd.DataFrame(processed_rows)
 
-def _parse_run_data(file_path: Path) -> pd.DataFrame:
-    """Lê o arquivo JSON com os dados de execução e o achata (flatten)."""
+def _parse_run_specs(file_path: Path) -> pd.DataFrame:
+    """Lê o arquivo 'runs-specs.json' e o achata (flatten)."""
     if not file_path.is_file():
-        print(f"AVISO: Arquivo de dados de execução não encontrado em '{file_path}'.")
         return pd.DataFrame()
-        
     with open(file_path, 'r', encoding='UTF-8') as f:
         data = json.load(f)
-
     raw_df = pd.DataFrame(data)
-    
-    # Verifica se formato do runs-specs.json
     if 'metrics' in raw_df.columns:
         return _flatten_run_data(raw_df)
-    
-    print("detecção para flattening falhou")
     return raw_df
 
-def _parse_results_data(file_path: Path) -> pd.DataFrame:
-    """Lê os resultados (alvos 'y') do arquivo de summary global."""
+def _parse_single_sa_summary(file_path: Path) -> List[float]:
+    """
+    Lê um único arquivo sa_summary.json e extrai todas as séries temporais,
+    concatenando-as em um único vetor.
+    """
     if not file_path.is_file():
-        print(f"AVISO: Arquivo de resultados não encontrado em '{file_path}'.")
-        return pd.DataFrame()
-        
+        return []
     with open(file_path, 'r', encoding='UTF-8') as f:
         data = json.load(f)
     
-    results = {}
-    # Itera sobre todas as possíveis saídas nos resultados
-    for key, value in data.get('results', {}).items():
-        if 'run_results' in value:
-            results[key] = value['run_results']
-            
-    return pd.DataFrame(results)
+    all_timesteps = []
+    # Acessa a lista de curvas dentro da chave 'results'
+    for curve in data.get('results', []):
+        image_data = curve.get('image')
+        if image_data is not None:
+            # Concatena a série temporal desta curva ao vetor principal
+            all_timesteps.extend(image_data)
+    return all_timesteps
 
-def load_data(metadata_path: Path, run_data_path: Path, results_path: Path) -> Tuple[pd.DataFrame, Dict[str, List[str]]]:
+def load_data(
+    run_specs_path: Path, 
+    results_base_dir: Path, 
+    metadata_path: Path,
+    result_filename: str = "sa_summary.json"
+) -> Tuple[pd.DataFrame, Dict[str, List[str]]]:
     """
-    Função principal do parser. Orquestra a leitura e junção de todos os
-    arquivos de dados da ESSS.
+    Função principal do parser. Orquestra a leitura e junção de todos os dados.
 
     Args:
-        metadata_path (Path): Caminho para o arquivo de metadados (global-sa-input.json).
-        run_data_path (Path): Caminho para os dados de entrada dos runs (runs-specs.json).
-        results_path (Path): Caminho para os resultados das simulações (global_sa_summary.json).
+        run_specs_path (Path): Caminho para o 'runs-specs.json'.
+        results_base_dir (Path): Caminho para a pasta que contém os diretórios de resultado (R_000XX).
+        metadata_path (Path): Caminho para o arquivo de metadados.
+        result_filename (str): Nome do arquivo de resultado a ser procurado em cada subpasta.
 
     Returns:
-        Tuple[pd.DataFrame, Dict[str, List[str]]]: Uma tupla contendo:
-            - Um DataFrame limpo e unificado com features (X) e targets (y).
-            - Um dicionário com os metadados das variáveis categóricas.
+        Uma tupla contendo o DataFrame unificado e os metadados.
     """
-    df_features = _parse_run_data(run_data_path)
-    df_targets = _parse_results_data(results_path)
+    # 1. Carrega as features e os metadados
+    df_features = _parse_run_specs(run_specs_path)
     variable_metadata = _parse_variable_metadata(metadata_path)
     
-    if not df_features.empty and not df_targets.empty:
-        # Define 'run_number' como índice para garantir o alinhamento correto, se existir
-        if 'run_number' in df_features.columns:
-            df_features = df_features.set_index('run_number')
+    if df_features.empty:
+        return pd.DataFrame(), {}
         
-        full_df = pd.concat([df_features, df_targets], axis=1)
-        return full_df.reset_index(), variable_metadata
-
-    return pd.DataFrame(), {}
+    # 2. Loop para coletar os resultados (Y) de cada run
+    project_name = run_specs_path.stem.replace('.runs-specs', '')
+    all_y_vectors = []
+    
+    for run_number in df_features['run_number']:
+        # Constrói o caminho para o arquivo de resultado do run específico
+        # Ex: .../results/my_project_R00001/sa_summary.json
+        result_file_path = results_base_dir / f"{project_name}_R{run_number:05}" / result_filename
+        
+        y_vector = _parse_single_sa_summary(result_file_path)
+        all_y_vectors.append(y_vector)
+        
+    # 3. Adiciona os vetores de saída ao DataFrame de features
+    df_features['outputs'] = all_y_vectors
+    
+    # Filtra runs que não tiveram um arquivo de resultado correspondente
+    df_features = df_features[df_features['outputs'].apply(len) > 0].copy()
+    
+    return df_features, variable_metadata
