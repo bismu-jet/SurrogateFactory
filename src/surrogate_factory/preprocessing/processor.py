@@ -33,6 +33,9 @@ def process_data(
 
     y = np.array(df['outputs'].tolist())
     
+    run_indices = df['run_number'].values
+    
+    y = np.array(df['outputs'].tolist())
     feature_cols = [col for col in df.columns if col not in ['run_number', 'outputs']]
     X = df[feature_cols].copy()
 
@@ -48,15 +51,13 @@ def process_data(
     X_scaled = scaler.fit_transform(X)
     X_scaled_df = pd.DataFrame(X_scaled, columns=feature_cols)
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X_scaled_df, y, test_size=test_size, random_state=random_state
+    X_train, X_test, y_train, y_test, indices_train, indices_test = train_test_split(
+        X_scaled_df, y, run_indices, test_size=test_size, random_state=random_state
     )
 
     return {
-        "X_train": X_train,
-        "X_test": X_test,
-        "y_train": y_train,
-        "y_test": y_test,
-        "encoders": encoders,
-        "scaler": scaler
+        "X_train": X_train, "X_test": X_test,
+        "y_train": y_train, "y_test": y_test,
+        "encoders": encoders, "scaler": scaler,
+        "test_indices": indices_test # Retorna os run_numbers do conjunto de teste
     }
