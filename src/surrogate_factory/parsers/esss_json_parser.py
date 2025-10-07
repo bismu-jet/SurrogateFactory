@@ -60,6 +60,7 @@ def _parse_single_sa_summary(file_path: Path) -> List[float]:
     concatenando-as em um único vetor.
     """
     if not file_path.is_file():
+        print("not added")
         return []
     with open(file_path, 'r', encoding='UTF-8') as f:
         data = json.load(f)

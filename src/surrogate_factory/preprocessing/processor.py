@@ -31,15 +31,11 @@ def process_data(
     if df.empty:
         raise ValueError("O DataFrame de entrada está vazio.")
 
-    # 1. Separar features (X) e targets (y) --- LÓGICA ALTERADA ---
-    # 'y' agora é a coluna 'outputs', convertida para um array NumPy.
     y = np.array(df['outputs'].tolist())
     
-    # 'X' são todas as outras colunas, exceto 'run_number' e 'outputs'.
     feature_cols = [col for col in df.columns if col not in ['run_number', 'outputs']]
     X = df[feature_cols].copy()
 
-    # 2. Encoding de variáveis categóricas (Lógica inalterada)
     categorical_cols = list(metadata.keys())
     encoders = {}
     for col in categorical_cols:
@@ -48,17 +44,14 @@ def process_data(
             X[col] = encoder.fit_transform(X[col])
             encoders[col] = encoder
 
-    # 3. Escalonamento das features (Lógica inalterada)
     scaler = MinMaxScaler()
     X_scaled = scaler.fit_transform(X)
     X_scaled_df = pd.DataFrame(X_scaled, columns=feature_cols)
 
-    # 4. Divisão em treino e teste (Lógica inalterada, agora com o 'y' correto)
     X_train, X_test, y_train, y_test = train_test_split(
         X_scaled_df, y, test_size=test_size, random_state=random_state
     )
 
-    # 5. Retorna os dados e os "artefatos"
     return {
         "X_train": X_train,
         "X_test": X_test,
