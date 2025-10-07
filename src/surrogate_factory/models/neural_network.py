@@ -28,6 +28,9 @@ def build_model(input_shape: int, output_shape: int) -> tf.keras.Model:
         # A escolha de 128 e 64 neurônios é um bom ponto de partida.
         Dense(128, activation='relu'),
         Dense(64, activation='relu'),
+        Dense(32, activation='relu'),
+        Dense(64, activation='relu'),
+        Dense(128, activation='relu'),
         
         # Camada de saída com um neurônio para cada valor do vetor de saída
         Dense(output_shape, name='output_layer')
