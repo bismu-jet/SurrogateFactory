@@ -1,18 +1,15 @@
 """
 Módulo de pré-processamento de dados para a arquitetura multi-modelo.
 
-Este módulo substitui o 'processor.py' original.
-A lógica segue o "Project 2":
-1. O split de dados (train/test) é feito ANTES (no pipeline).
-2. O encoding das features é feito manualmente (sem LabelEncoder).
-3. O scaling é feito DEPOIS do split, fitando-se apenas nos dados de treino.
-4. Os dados de Y (QoIs) são reestruturados por QoI, não por run.
+LÓGICA DO PROJETO 2:
+- O scaling (MinMaxScaler) FOI REMOVIDO, pois o modelo RBF
+  e seu ajuste de hiperparâmetros (d0) esperam os dados crus.
 """
 
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Any, Tuple, Set
-from sklearn.preprocessing import MinMaxScaler
+# A linha 'from sklearn.preprocessing import MinMaxScaler' foi removida.
 
 def _build_feature_array(
     features_df: pd.DataFrame, 
@@ -20,31 +17,29 @@ def _build_feature_array(
 ) -> Tuple[np.ndarray, List[str]]:
     """
     Converte o DataFrame de features em um array numérico,
-
-    Args:
-        features_df: O DataFrame de features (ex: df_train_features).
-        metadata: O dicionário de metadados com as variáveis categóricas.
-
-    Returns:
-        Uma tupla contendo:
-        1. O array numpy (X_raw) com os dados prontos para o scaler.
-        2. A lista de nomes de features na ordem em que foram processadas.
+    imitando a lógica de '_GetPointsFromRun' do Project 2.
     """
     
     categorical_cols = list(metadata.keys())
+    
+    # Pega todas as colunas que não são 'run_number'
     all_feature_names = [col for col in features_df.columns if col != 'run_number']
+    
+    # Garante uma ordem consistente: categóricas primeiro, depois numéricas
     ordered_feature_names = [col for col in all_feature_names if col in categorical_cols]
     numeric_cols = [col for col in all_feature_names if col not in categorical_cols]
     ordered_feature_names.extend(numeric_cols)
 
     processed_rows = []
     
+    # itertuples é mais rápido que iterrows
     for row in features_df[ordered_feature_names].itertuples(index=False):
         new_row_values = []
         for i, value in enumerate(row):
             col_name = ordered_feature_names[i]
             
             if col_name in categorical_cols:
+                # Lógica do Project 2: converter valor categórico em seu índice
                 try:
                     valid_values = metadata[col_name]
                     idx = valid_values.index(value)
@@ -53,10 +48,12 @@ def _build_feature_array(
                     print(f"AVISO: Valor '{value}' não encontrado no metadata de '{col_name}'. Usando -1.0")
                     new_row_values.append(-1.0)
             else:
+                # Lógica do Project 2: apenas converte para float
                 new_row_values.append(float(value))
         
         processed_rows.append(new_row_values)
         
+    # Retorna os dados crus (raw)
     return np.array(processed_rows), ordered_feature_names
 
 
@@ -66,43 +63,58 @@ def _restructure_qois(
 ) -> Tuple[Dict[str, np.ndarray], List[str]]:
     """
     Transforma o dicionário de QoIs de [run][qoi] para [qoi][runs].
-    
-    Args:
-        qois_per_run: O dicionário vindo do parser {run_num: {qoi_name: [dados]}}.
-        run_numbers: A lista de run_numbers a serem incluídos (ex: train_runs).
-
-    Returns:
-        Uma tupla contendo:
-        1. O dicionário de targets {qoi_name: np.array([[...], [...]])}.
-        2. A lista de todos os nomes de QoIs encontrados.
     """
+    if not qois_per_run:
+        return {}, []
 
+    # 1. Encontrar o super-conjunto de todos os nomes de QoIs
     all_qoi_names_set: Set[str] = set()
     for qoi_dict in qois_per_run.values():
         all_qoi_names_set.update(qoi_dict.keys())
     
     all_qoi_names = sorted(list(all_qoi_names_set))
+    
+    # 2. Inicializar o dicionário de saída
     y_per_qoi: Dict[str, List[np.ndarray]] = {qoi_name: [] for qoi_name in all_qoi_names}
     
+    # 3. Rastrear QoIs que se mostrarem inválidos
+    valid_qoi_names_final = set(all_qoi_names)
+
+    # 4. Coletar os dados
     for run_num in run_numbers:
         if run_num not in qois_per_run:
-            continue 
+            continue
             
         run_qoi_data = qois_per_run[run_num]
         
         for qoi_name in all_qoi_names:
+            if qoi_name not in valid_qoi_names_final:
+                continue # Pula QoI já invalidado
+                
             qoi_vector = run_qoi_data.get(qoi_name)
             
             if qoi_vector is not None:
+                # Adiciona o vetor de dados
                 y_per_qoi[qoi_name].append(np.array(qoi_vector))
-            else:
-                del y_per_qoi[qoi_name]
-                all_qoi_names.remove(qoi_name)
+            elif qoi_name in valid_qoi_names_final:
+                # Se um run não tem um QoI, esse QoI é inválido para todos
+                print(f"AVISO: QoI '{qoi_name}' não encontrado no Run #{run_num}. Excluindo este QoI do dataset.")
+                valid_qoi_names_final.remove(qoi_name)
+                del y_per_qoi[qoi_name] # Remove dos dados de saída
 
+    # 5. Converter listas para arrays numpy 2D e filtrar inconsistências
     final_y_per_qoi: Dict[str, np.ndarray] = {}
-    for qoi_name, data_list in y_per_qoi.items():
+    for qoi_name in valid_qoi_names_final:
+        data_list = y_per_qoi[qoi_name]
         if data_list:
-            final_y_per_qoi[qoi_name] = np.array(data_list)
+             try:
+                # Tenta empilhar os arrays. Falhará se tiverem tamanhos diferentes.
+                stacked_array = np.array(data_list)
+                if stacked_array.ndim == 1: # numpy cria array 1D se os tamanhos forem inconsistentes
+                     raise ValueError("Tamanhos de vetor inconsistentes.")
+                final_y_per_qoi[qoi_name] = stacked_array
+             except ValueError:
+                 print(f"AVISO: QoI '{qoi_name}' tem vetores de tamanhos inconsistentes entre runs. Excluindo.")
             
     final_qoi_names = sorted(list(final_y_per_qoi.keys()))
             
@@ -118,15 +130,29 @@ def process_data_multi_model(
 ) -> Dict[str, Any]:
     """
     Função principal de pré-processamento para o fluxo multi-modelo.
-    Assume que os dados já foram divididos em train e test.
+    O SCALER FOI REMOVIDO para ser compatível com o RBF.
     """
     
+    # --- 1. Processar Features (X) ---
+    print("Processando features de treino (X_train)...")
     X_train_raw, feature_names = _build_feature_array(df_train_features, metadata)
+    
+    print("Processando features de teste (X_test)...")
+    # Garante que o df_test tenha as colunas na mesma ordem
     X_test_raw, _ = _build_feature_array(df_test_features[df_train_features.columns], metadata)
-    scaler = MinMaxScaler()
-    X_train_scaled = scaler.fit_transform(X_train_raw)
-    X_test_scaled = scaler.transform(X_test_raw)
 
+    # --- 2. Escalonar Features (X) ---
+    # O SCALER FOI REMOVIDO. Usamos os dados "crus".
+    X_train_processed = X_train_raw
+    X_test_processed = X_test_raw
+    
+    print(f"Processamento de X concluído. Shape X_train: {X_train_processed.shape}")
+    if X_train_processed.shape[0] > 0:
+        print(f"Exemplo de dados X_train (primeira linha, crus): {X_train_processed[0]}")
+
+
+    # --- 3. Processar Targets (Y) ---
+    print("Reestruturando dados de target (Y) por QoI...")
     
     train_run_numbers = df_train_features['run_number'].tolist()
     test_run_numbers = df_test_features['run_number'].tolist()
@@ -134,18 +160,24 @@ def process_data_multi_model(
     y_train_per_qoi, train_qoi_names = _restructure_qois(qois_train, train_run_numbers)
     y_test_per_qoi, test_qoi_names = _restructure_qois(qois_test, test_run_numbers)
 
+    # --- 4. Garantir Consistência de QoIs ---
+    # Garante que ambos os conjuntos (treino e teste) tenham os mesmos QoIs
     valid_qoi_names = sorted(list(set(train_qoi_names) & set(test_qoi_names)))
     
-    final_y_train = {qoi: y_train_per_qoi[qoi] for qoi in valid_qoi_names}
-    final_y_test = {qoi: y_test_per_qoi[qoi] for qoi in valid_qoi_names}
+    final_y_train = {qoi: y_train_per_qoi[qoi] for qoi in valid_qoi_names if qoi in y_train_per_qoi}
+    final_y_test = {qoi: y_test_per_qoi[qoi] for qoi in valid_qoi_names if qoi in y_test_per_qoi}
     
+    # Filtra novamente caso o restructure tenha removido algo
+    final_valid_qoi_names = sorted(list(final_y_train.keys()))
+    
+    print(f"Processamento concluído. Encontrados {len(final_valid_qoi_names)} QoIs consistentes.")
 
     return {
-        "X_train": X_train_scaled,
-        "X_test": X_test_scaled,
+        "X_train": X_train_processed,
+        "X_test": X_test_processed,
         "y_train_per_qoi": final_y_train,
         "y_test_per_qoi": final_y_test,
-        "scaler": scaler,
-        "qoi_names": valid_qoi_names,
+        "scaler": None, # Não há mais scaler
+        "qoi_names": final_valid_qoi_names,
         "feature_names": feature_names
     }

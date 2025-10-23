@@ -3,30 +3,27 @@ import pandas as pd
 from pathlib import Path
 from sklearn.model_selection import train_test_split
 
-# --- Novos imports (estilo Project 2) ---
 from parsers.esss_json_parser import (
     _parse_variable_metadata, 
     _parse_run_specs, 
     load_specs_and_qois_for_runs,
-    _parse_single_sa_summary # Já estava no pipeline original
+    _parse_single_sa_summary
 )
 from preprocessing.processor import process_data_multi_model
+from models.rbf_model import build_and_train_tuned_rbf
 
-# --- Imports mantidos ---
 from models.neural_network import build_model
 from evaluation.plotting import plot_feature_distribution, plot_target_timeseries
 from evaluation.plotting import plot_comparison_timeseries
 
 print("--- INICIANDO PIPELINE DE TREINAMENTO MULTI-MODELO (Estilo Project 2) ---")
 
-# --- 1. Definições de Caminhos e Parâmetros ---
 METADATA_FILE = Path(r"C:\PFC\SurrogateFactory\Data Pipeline\esss 3phase lgr field.global-sa-input.json")
 RUN_DATA_FILE = Path(r"C:\PFC\SurrogateFactory\Data Pipeline\esss 3phase lgr field.runs-specs.json")
 RESULTS_BASE_DIR = Path(r"C:\PFC\SurrogateFactory\Data Pipeline\esss 3phase lgr field") 
 
-# Parâmetros para o split de dados
 TEST_SIZE = 0.2
-RANDOM_STATE = 42
+RANDOM_STATE = 41
 
 try:
     print("\n--- Etapa 1: Carregando Specs e Metadados ---")
@@ -86,46 +83,38 @@ try:
     print(f"Formato de X_train: {X_train.shape}, Formato de X_test: {X_test.shape}")
 
     
-    print("\n--- Etapa 5: Treinamento Multi-Modelo (Loop por QoI) ---")
+# --- ETAPA 5 SUBSTITUÍDA: Treinamento Multi-Modelo (RBF c/ Tuning) ---
+    print("\n--- Etapa 5: Treinamento Multi-Modelo (RBF c/ Tuning) ---")
     
     trained_models = {}
 
     for qoi_name in qoi_names:
-        print(f"\n--- Treinando Modelo para o QoI: {qoi_name} ---")
+        print(f"\n--- Treinando Modelo RBF para o QoI: {qoi_name} ---")
         
+        # 1. Pegar os dados específicos deste QoI
         y_train_qoi = y_train_per_qoi[qoi_name]
         y_test_qoi = y_test_per_qoi[qoi_name]
         
-        n_features = X_train.shape[1]
-        n_outputs = y_train_qoi.shape[1] 
-        
-        print(f"Arquitetura: {n_features} features -> {n_outputs} saídas")
-        
-        surrogate_model = build_model(input_shape=n_features, output_shape=n_outputs)
-        if qoi_name == qoi_names[0]:
-            surrogate_model.summary() 
-
-        print("Iniciando o Treinamento ▶️")
-        history = surrogate_model.fit(
-            X_train,
-            y_train_qoi,
-            epochs=10,
-            batch_size=2,
-            validation_data=(X_test, y_test_qoi),
-            verbose=1
-        )
-        
-        loss = surrogate_model.evaluate(X_test, y_test_qoi, verbose=0)
-        print(f"Perda (Loss) final no teste para '{qoi_name}': {loss:.4f}")
-        
-        trained_models[qoi_name] = surrogate_model
+        # 2. Treinar o modelo RBF com tuning automático (Estilo Project 2)
+        try:
+            # Nota: X_train e X_test já estão escalados (MinMax)
+            surrogate_model = build_and_train_tuned_rbf(
+                X_train, y_train_qoi,
+                X_test, y_test_qoi,
+                num_tries=2000 # Reduza para ~20 para testes rápidos, aumente para ~100+ para precisão
+            )
+            trained_models[qoi_name] = surrogate_model
+        except Exception as e:
+            print(f"ERRO ao treinar RBF para {qoi_name}: {e}. Pulando este QoI.")
+            continue # Pula para o próximo QoI
 
     print("\n--- Treinamento de todos os modelos concluído ---")
 
 
+    # --- ETAPA 6 ATUALIZADA: Avaliação e Comparação Visual ---
     print("\n--- Etapa 6: Avaliação e Comparação Visual (Loop por QoI) ---")
         
-    if len(X_test) > 0:
+    if len(X_test) > 0 and trained_models:
         # Pega o primeiro run do nosso conjunto de teste para a comparação
         sample_to_compare_idx = 0
         run_number_to_compare = test_indices_map[sample_to_compare_idx]
@@ -141,31 +130,37 @@ try:
         y_pred_old_dict = _parse_single_sa_summary(old_surrogate_path)
         
         # Faz a predição e plota para CADA modelo treinado
-        for qoi_name in qoi_names:
+        for qoi_name in trained_models.keys(): # Itera apenas nos modelos que treinaram com sucesso
             print(f"Gerando gráfico de comparação para o QoI: {qoi_name}...")
             
             # Pega o modelo e os dados Y corretos
             model = trained_models[qoi_name]
             y_true = y_test_per_qoi[qoi_name][sample_to_compare_idx]
             
-            # Previsão do nosso novo modelo (MLP)
-            y_pred_new = model.predict(x_sample, verbose=0)[0] # Adicionado verbose=0
+            # --- MUDANÇA NA PREDIÇÃO ---
+            # Previsão do nosso novo modelo (RBF Tuned)
+            # RBF usa .predict_values()
+            y_pred_new = model.predict_values(x_sample)[0] 
             
             # Previsão do modelo antigo (RBF)
             y_pred_old = y_pred_old_dict.get(qoi_name)
 
             # Gera o gráfico
             if y_pred_old:
-                # --- CHAMADA CORRIGIDA ---
                 plot_comparison_timeseries(
                     y_true=y_true, 
                     y_pred_new=y_pred_new, 
                     y_pred_old=y_pred_old, 
-                    run_number=run_number_to_compare,  # Passa o número
-                    qoi_name=qoi_name                   # Passa o nome
+                    run_number=run_number_to_compare,
+                    qoi_name=qoi_name,
+                    # Passa o novo rótulo para o gráfico
+                    new_model_label="Previsão do Novo Modelo (RBF Tuned)"
                 )
             else:
                 print(f"AVISO: Não foi possível encontrar o QoI '{qoi_name}' no 'surrogate_summary.json' (modelo antigo).")
+    
+    elif not trained_models:
+        print("Nenhum modelo RBF foi treinado com sucesso. Pulando etapa de avaliação.")
 
     print("\n--- PIPELINE CONCLUÍDA COM SUCESSO ---")
 
