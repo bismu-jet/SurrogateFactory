@@ -76,8 +76,6 @@ def _restructure_qois(
         1. O dicionário de targets {qoi_name: np.array([[...], [...]])}.
         2. A lista de todos os nomes de QoIs encontrados.
     """
-    if not qois_per_run:
-        return {}, []
 
     all_qoi_names_set: Set[str] = set()
     for qoi_dict in qois_per_run.values():
