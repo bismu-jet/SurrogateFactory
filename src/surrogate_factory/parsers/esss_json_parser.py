@@ -54,64 +54,115 @@ def _parse_run_specs(file_path: Path) -> pd.DataFrame:
         return _flatten_run_data(raw_df)
     return raw_df
 
-def _parse_single_sa_summary(file_path: Path) -> List[float]:
+def _parse_single_sa_summary(file_path: Path) -> Dict[str, List[float]]:
     """
-    Lê um único arquivo sa_summary.json e extrai todas as séries temporais,
-    concatenando-as em um único vetor.
+    Lê um único arquivo sa_summary.json e extrai cada curva separadamente.
+    
+    Estrutura esperada do JSON:
+    {
+        "results": [
+            {
+                "caption": "PRODUCER - Injector H2S Flow Rate",
+                "id": {
+                    "element_id": "_g_PRODUCER",
+                    "element_name": "PRODUCER",
+                    "property_name": "Injector H2S Flow Rate",
+                    "study_id": "project.setup_container.item00001"
+                },
+                "image": [...]
+            }
+        ]
+    }
+    
+    Args:
+        file_path: Caminho para o arquivo sa_summary.json
+        
+    Returns:
+        Dict com formato: {'caption - study_id': [valores...], ...}
+        Exemplo: {'PRODUCER - Injector H2S Flow Rate - project.setup_container.item00001': [...]}
     """
     if not file_path.is_file():
-        print("not added")
-        return []
+        print(f"AVISO: Arquivo não encontrado: {file_path}")
+        return {}
+    
     with open(file_path, 'r', encoding='UTF-8') as f:
         data = json.load(f)
     
-    all_timesteps = []
-    # Acessa a lista de curvas dentro da chave 'results'
-    for curve in data.get('results', []):
+    curves_dict = {}
+    
+    for idx, curve in enumerate(data.get('results', [])):
+        caption = curve.get('caption')
+        study_id = None
+        if 'id' in curve and isinstance(curve['id'], dict):
+            study_id = curve['id'].get('study_id')
+        
+        # Constrói o nome único no formato "caption - study_id"
+        # f"{qoi.caption} - {qoi.id.study_id}"
+        if caption and study_id:
+            qoi_name = f"{caption} - {study_id}"
+        else:
+            qoi_name = f"{caption} - {idx}"
+        
         image_data = curve.get('image')
         if image_data is not None:
-            # Concatena a série temporal desta curva ao vetor principal
-            all_timesteps.extend(image_data)
-    return all_timesteps
+            curves_dict[qoi_name] = image_data
+    
+    return curves_dict
 
-def load_data(
+def load_specs_and_qois_for_runs(
     run_specs_path: Path, 
     results_base_dir: Path, 
-    metadata_path: Path,
+    run_numbers_to_load: List[int],
     result_filename: str = "sa_summary.json"
-) -> Tuple[pd.DataFrame, Dict[str, List[str]]]:
+) -> Tuple[pd.DataFrame, Dict[int, Dict[str, List[float]]]]:
     """
-    Função principal do parser. Orquestra a leitura e junção de todos os dados.
+    Lê as especificações (features) e os QoIs (targets) para uma lista
+    específica de run_numbers.
 
     Args:
         run_specs_path (Path): Caminho para o 'runs-specs.json'.
-        results_base_dir (Path): Caminho para a pasta que contém os diretórios de resultado (R_000XX).
-        metadata_path (Path): Caminho para o arquivo de metadados.
-        result_filename (str): Nome do arquivo de resultado a ser procurado em cada subpasta.
+        results_base_dir (Path): Pasta base que contém os diretórios R_000XX.
+        run_numbers_to_load (List[int]): A lista de run_numbers para os quais carregar dados.
+        result_filename (str): Nome do arquivo de resultado (ex: "sa_summary.json").
 
     Returns:
-        Uma tupla contendo o DataFrame unificado e os metadados.
+        Uma tupla contendo:
+        1. um DataFrame de features (filtrado para os run_numbers_to_load).
+        2. um Dicionário de QoIs {run_number: {qoi_name: [dados...]}}.
     """
-    df_features = _parse_run_specs(run_specs_path)
-    variable_metadata = _parse_variable_metadata(metadata_path)
     
-    if df_features.empty:
+    all_features_df = _parse_run_specs(run_specs_path)
+    if all_features_df.empty:
+        print("AVISO: Não foi possível carregar 'run_specs_path'.")
         return pd.DataFrame(), {}
-        
+
+    features_df = all_features_df[
+        all_features_df['run_number'].isin(run_numbers_to_load)
+    ].copy()
+
+    qois_per_run: Dict[int, Dict[str, List[float]]] = {}
     project_name = run_specs_path.stem.replace('.runs-specs', '')
-    all_y_vectors = []
     
-    for run_number in df_features['run_number']:
-        # Constrói o caminho para o arquivo de resultado do run específico
-        # Ex: .../results/my_project_R00001/sa_summary.json
+    valid_run_numbers = []
+
+    for run_number in run_numbers_to_load:
         result_file_path = results_base_dir / f"{project_name}_R{run_number:05}" / result_filename
         
-        y_vector = _parse_single_sa_summary(result_file_path)
-        all_y_vectors.append(y_vector)
+        # _parse_single_sa_summary já retorna um dict {qoi_name: [dados...]}
+        # e lida com arquivos não encontrados (retornando {})
+        y_qoi_dict = _parse_single_sa_summary(result_file_path)
         
-    df_features['outputs'] = all_y_vectors
+        if y_qoi_dict:
+            qois_per_run[run_number] = y_qoi_dict
+            valid_run_numbers.append(run_number)
+        else:
+            print(f"AVISO: Arquivo de resultado não encontrado para Run #{run_number}. Removendo dos dados.")
+
+    # Garante que as features e os QoIs são consistentes
+    # Filtra o dataframe de features para conter APENAS os runs
+    # para os quais encontramos um arquivo de QoI.
+    features_df = features_df[
+        features_df['run_number'].isin(valid_run_numbers)
+    ].reset_index(drop=True)
     
-    # Filtra runs que não tiveram um arquivo de resultado correspondente
-    df_features = df_features[df_features['outputs'].apply(len) > 0].copy()
-    
-    return df_features, variable_metadata
+    return features_df, qois_per_run
