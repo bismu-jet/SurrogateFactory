@@ -48,22 +48,32 @@ def plot_target_timeseries(y_data: np.ndarray, num_to_plot: int = 5, save_path: 
     plt.close()
     print(f"Gráfico das séries temporais de saída salvo em: {save_path}")
 
-def plot_comparison_timeseries(y_true, y_pred_new, y_pred_old, run_number, save_path="comparison_run_"):
+def plot_comparison_timeseries(
+    y_true, 
+    y_pred_new, 
+    y_pred_old, 
+    run_number: int, 
+    qoi_name: str, 
+    save_path_prefix: str = "comparison"
+):
     """
     Plota a comparação entre o resultado real, a previsão do modelo novo e a do antigo.
+    Esta versão aceita run_number e qoi_name separados para criar nomes de arquivo seguros.
     """
     plt.figure(figsize=(15, 7))
     plt.plot(y_true, label='Resultado Real (Ground Truth)', color='black', linewidth=2.5, alpha=0.8)
     plt.plot(y_pred_new, label='Previsão do Novo Modelo (Rede Neural)', color='blue', linestyle='--', linewidth=2)
     plt.plot(y_pred_old, label='Previsão do Modelo Antigo (RBF)', color='red', linestyle=':', linewidth=2)
     
-    plt.title(f'Comparação de Modelos para o Run #{run_number}')
+    plt.title(f'Comparação de Modelos para o Run #{run_number}\nQoI: {qoi_name}')
     plt.xlabel('Passos de Tempo Concatenados')
     plt.ylabel('Valor da Saída')
     plt.legend()
     plt.grid(True, which='both', linestyle='--', linewidth=0.5)
     
-    final_save_path = f"{save_path}{run_number}.png"
+    qoi_name_safe = "_".join(qoi_name.split(' ')[:3]).replace('-', '_')
+    
+    final_save_path = f"{save_path_prefix}_run_{run_number}_qoi_{qoi_name_safe}.png"
     plt.savefig(final_save_path)
     plt.close()
-    print(f"Gráfico de comparação para o Run #{run_number} salvo em: {final_save_path}")
+    print(f"Gráfico de comparação para o Run #{run_number} (QoI: {qoi_name}) salvo em: {final_save_path}")
