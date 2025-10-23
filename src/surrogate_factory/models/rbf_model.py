@@ -16,7 +16,7 @@ def build_and_train_rbf(X_train, y_train):
     print("Treinamento do RBF Simples concluído.")
     return rbf_model
 
-def build_and_train_tuned_rbf(X_train, y_train, X_test, y_test, num_tries=100):
+def build_and_train_tuned_rbf(X_train, y_train, X_test, y_test, num_tries=1000):
     """
     Cria e treina um modelo RBF, procurando os melhores hiperparâmetros (d0, degree)
     usando os dados de validação (X_test, y_test).
@@ -33,7 +33,7 @@ def build_and_train_tuned_rbf(X_train, y_train, X_test, y_test, num_tries=100):
     smallest_error = float('inf')
 
     # Define as distâncias e graus a serem testados
-    distances = np.geomspace(1, 1000, num=num_tries)
+    distances = np.geomspace(1, 1000.0, num=num_tries)
     degrees = [-1, 0, 1]
 
     print(f"--- Iniciando Tuning do RBF (Testando {len(distances) * len(degrees)} combinações) ---")
