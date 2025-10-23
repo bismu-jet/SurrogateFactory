@@ -82,7 +82,6 @@ def _parse_single_sa_summary(file_path: Path) -> Dict[str, List[float]]:
         Exemplo: {'PRODUCER - Injector H2S Flow Rate - project.setup_container.item00001': [...]}
     """
     if not file_path.is_file():
-        print(f"AVISO: Arquivo não encontrado: {file_path}")
         return {}
     
     with open(file_path, 'r', encoding='UTF-8') as f:
@@ -156,7 +155,7 @@ def load_specs_and_qois_for_runs(
             qois_per_run[run_number] = y_qoi_dict
             valid_run_numbers.append(run_number)
         else:
-            print(f"AVISO: Arquivo de resultado não encontrado para Run #{run_number}. Removendo dos dados.")
+            continue
 
     # Garante que as features e os QoIs são consistentes
     # Filtra o dataframe de features para conter APENAS os runs
