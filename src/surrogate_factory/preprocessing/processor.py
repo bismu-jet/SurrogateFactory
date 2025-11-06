@@ -9,7 +9,7 @@ LÓGICA DO PROJETO 2:
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Any, Tuple, Set
-# A linha 'from sklearn.preprocessing import MinMaxScaler' foi removida.
+from sklearn.preprocessing import MinMaxScaler
 
 def _build_feature_array(
     features_df: pd.DataFrame, 
@@ -169,15 +169,30 @@ def process_data_multi_model(
     
     # Filtra novamente caso o restructure tenha removido algo
     final_valid_qoi_names = sorted(list(final_y_train.keys()))
+
+    y_scalers = {}
+    final_y_train_scaled = {}
+    final_y_test_scaled = {}
+
+    for qoi in final_valid_qoi_names:
+        y_scaler = MinMaxScaler()
+        y_train_flat = final_y_train[qoi].flatten().reshape(-1,1)
+        y_scaler.fit(y_train_flat)
+        y_scalers[qoi] = y_scaler
+
+        final_y_train_scaled[qoi] = y_scaler.transform(y_train_flat).reshape(final_y_train[qoi].shape)
+
+        y_test_flat = final_y_test[qoi].flatten().reshape(-1, 1)
+        final_y_test_scaled[qoi] = y_scaler.transform(y_test_flat).reshape(final_y_test[qoi].shape)
     
     print(f"Processamento concluído. Encontrados {len(final_valid_qoi_names)} QoIs consistentes.")
 
     return {
         "X_train": X_train_processed,
         "X_test": X_test_processed,
-        "y_train_per_qoi": final_y_train,
-        "y_test_per_qoi": final_y_test,
-        "scaler": None, # Não há mais scaler
+        "y_train_per_qoi": final_y_train_scaled,
+        "y_test_per_qoi": final_y_test_scaled,
+        "y_scalers": y_scalers,
         "qoi_names": final_valid_qoi_names,
         "feature_names": feature_names
     }

@@ -33,8 +33,8 @@ def build_and_train_tuned_rbf(X_train, y_train, X_test, y_test, num_tries=1000):
     smallest_error = float('inf')
 
     # Define as distâncias e graus a serem testados
-    distances = np.geomspace(1, 1000.0, num=num_tries)
-    degrees = [-1, 0, 1]
+    distances = np.geomspace(1, 100000.0, num=num_tries)
+    degrees = [0]
 
     print(f"--- Iniciando Tuning do RBF (Testando {len(distances) * len(degrees)} combinações) ---")
 

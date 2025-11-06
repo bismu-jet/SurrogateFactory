@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
 
 from parsers.esss_json_parser import (
     _parse_variable_metadata, 
@@ -58,6 +59,28 @@ try:
         run_numbers_to_load=test_run_nums,
         result_filename="sa_summary.json"
     )
+    print("\n" + "="*30)
+    print("  INVESTIGAÇÃO: Verificando Dados CRUS (Etapa 3)")
+    
+    # Bloco dinâmico para encontrar um Run e QoI de teste
+    if qois_test:
+        RUN_PARA_TESTAR = list(qois_test.keys())[0] # Pega o primeiro run_num do dict de teste
+        QOI_PARA_TESTAR = list(qois_test[RUN_PARA_TESTAR].keys())[0] # Pega o primeiro QoI desse run
+    
+    if RUN_PARA_TESTAR is not None:
+        try:
+            # Pega o dado CRU do dicionário carregado pelo parser
+            raw_vector = qois_test[RUN_PARA_TESTAR][QOI_PARA_TESTAR]
+            print(f"  QoI: {QOI_PARA_TESTAR}")
+            print(f"  Run: {RUN_PARA_TESTAR} (Primeiro run encontrado no TEST set)")
+            print(f"  Média do Vetor CRU: {np.mean(raw_vector)}")
+            print(f"  Max do Vetor CRU:   {np.max(raw_vector)}")
+            print(f"  Min do Vetor CRU:   {np.min(raw_vector)}")
+        except KeyError:
+            print(f"  AVISO: Falha ao inspecionar Run {RUN_PARA_TESTAR} ou QoI '{QOI_PARA_TESTAR}'.")
+    else:
+        print("  AVISO: `qois_test` está vazio. Nenhum run de teste foi carregado.")
+    print("="*30 + "\n")
 
     print("\n--- Etapa 4: Pré-processando os Dados (Estilo Project 2) ---")
     processed_data = process_data_multi_model(
@@ -73,6 +96,7 @@ try:
     y_train_per_qoi = processed_data["y_train_per_qoi"]
     y_test_per_qoi = processed_data["y_test_per_qoi"]
     qoi_names = processed_data["qoi_names"]
+    y_scalers = processed_data["y_scalers"]
     
     test_indices_map = pd.Series(
         df_test_features['run_number'].values, 
@@ -94,6 +118,8 @@ try:
         # 1. Pegar os dados específicos deste QoI
         y_train_qoi = y_train_per_qoi[qoi_name]
         y_test_qoi = y_test_per_qoi[qoi_name]
+
+        print(f"  [DIAG] Y_TRAIN (Scaled) Min: {np.min(y_train_qoi):.4f}, Max: {np.max(y_train_qoi):.4f}")
         
         # 2. Treinar o modelo RBF com tuning automático (Estilo Project 2)
         try:
@@ -101,7 +127,7 @@ try:
             surrogate_model = build_and_train_tuned_rbf(
                 X_train, y_train_qoi,
                 X_test, y_test_qoi,
-                num_tries=2000 # Reduza para ~20 para testes rápidos, aumente para ~100+ para precisão
+                num_tries=200
             )
             trained_models[qoi_name] = surrogate_model
         except Exception as e:
@@ -135,13 +161,16 @@ try:
             
             # Pega o modelo e os dados Y corretos
             model = trained_models[qoi_name]
-            y_true = y_test_per_qoi[qoi_name][sample_to_compare_idx]
-            
-            # --- MUDANÇA NA PREDIÇÃO ---
-            # Previsão do nosso novo modelo (RBF Tuned)
-            # RBF usa .predict_values()
-            y_pred_new = model.predict_values(x_sample)[0] 
-            
+            y_true_scaled = y_test_per_qoi[qoi_name][sample_to_compare_idx]
+            y_scaler = y_scalers[qoi_name]
+            print(f"  [DIAG] Y_TRUE (Scaled) Min: {np.min(y_true_scaled):.4f}, Max: {np.max(y_true_scaled):.4f}")
+
+            y_true = y_scaler.inverse_transform(y_true_scaled.reshape(-1, 1)).flatten()
+            print(f"  [DIAG] Y_TRUE (Unscaled) Min: {np.min(y_true):.4f}, Max: {np.max(y_true):.4f}")
+            y_pred_new_scaled = model.predict_values(x_sample)[0] 
+            print(f"  [DIAG] Y_PRED (Scaled) Min: {np.min(y_pred_new_scaled):.4f}, Max: {np.max(y_pred_new_scaled):.4f}")
+            y_pred_new = y_scaler.inverse_transform(y_pred_new_scaled.reshape(-1, 1)).flatten()
+            print(f"  [DIAG] Y_PRED (Unscaled) Min: {np.min(y_pred_new):.4f}, Max: {np.max(y_pred_new):.4f}")
             # Previsão do modelo antigo (RBF)
             y_pred_old = y_pred_old_dict.get(qoi_name)
 
