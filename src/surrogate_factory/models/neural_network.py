@@ -4,6 +4,7 @@ Módulo para construção de arquiteturas de modelos de redes neurais.
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Input
+from tensorflow.keras.layers import Dropout
 
 def build_model(input_shape: int, output_shape: int) -> tf.keras.Model:
     """
@@ -21,23 +22,17 @@ def build_model(input_shape: int, output_shape: int) -> tf.keras.Model:
         Um modelo Keras sequencial, compilado e pronto para o treinamento.
     """
     model = Sequential([
-        # Camada de entrada com o formato dos nossos dados X
         Input(shape=(input_shape,), name='input_layer'),
         
-        # Camadas ocultas (hidden layers) para aprender os padrões.
-        # A escolha de 128 e 64 neurônios é um bom ponto de partida.
+        Dense(256, activation='relu'),
+        Dropout(0.2),
         Dense(128, activation='relu'),
+        Dropout(0.2),
         Dense(64, activation='relu'),
-        Dense(32, activation='relu'),
-        Dense(64, activation='relu'),
-        Dense(128, activation='relu'),
         
-        # Camada de saída com um neurônio para cada valor do vetor de saída
         Dense(output_shape, name='output_layer')
     ], name='surrogate_model')
     
-    # Compila o modelo. 'adam' é um otimizador eficiente e 'mean_squared_error'
-    # é a função de perda padrão para problemas de regressão.
     model.compile(
         optimizer='adam',
         loss='mean_squared_error'
