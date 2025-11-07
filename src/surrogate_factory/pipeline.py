@@ -12,6 +12,7 @@ from parsers.esss_json_parser import (
 )
 from preprocessing.processor import process_data_multi_model
 from models.rbf_model import build_and_train_tuned_rbf
+from models.kriging_model import build_and_train_tuned_kriging
 
 from models.neural_network import build_model
 from evaluation.plotting import plot_feature_distribution, plot_target_timeseries
@@ -113,7 +114,7 @@ try:
     trained_models = {}
 
     for qoi_name in qoi_names:
-        print(f"\n--- Treinando Modelo RBF para o QoI: {qoi_name} ---")
+        print(f"\n--- Treinando Modelo Kriging para o QoI: {qoi_name} ---")
         
         # 1. Pegar os dados específicos deste QoI
         y_train_qoi = y_train_per_qoi[qoi_name]
@@ -124,10 +125,9 @@ try:
         # 2. Treinar o modelo RBF com tuning automático (Estilo Project 2)
         try:
             # Nota: X_train e X_test já estão escalados (MinMax)
-            surrogate_model = build_and_train_tuned_rbf(
+            surrogate_model = build_and_train_tuned_kriging(
                 X_train, y_train_qoi,
-                X_test, y_test_qoi,
-                num_tries=200
+                X_test, y_test_qoi
             )
             trained_models[qoi_name] = surrogate_model
         except Exception as e:
@@ -183,7 +183,7 @@ try:
                     run_number=run_number_to_compare,
                     qoi_name=qoi_name,
                     # Passa o novo rótulo para o gráfico
-                    new_model_label="Previsão do Novo Modelo (RBF Tuned)"
+                    new_model_label="Previsão do Novo Modelo (Kriging Tuned)"
                 )
             else:
                 print(f"AVISO: Não foi possível encontrar o QoI '{qoi_name}' no 'surrogate_summary.json' (modelo antigo).")
