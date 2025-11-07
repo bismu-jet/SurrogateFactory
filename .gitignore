@@ -20,7 +20,7 @@ dist/
 .coverage
 htmlcov/
 
-Data Pipeline/
+../Data Pipeline/
 
 .DS_Store  # macOS
 Thumbs.db  # Windows
