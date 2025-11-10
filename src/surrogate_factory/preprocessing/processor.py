@@ -124,6 +124,8 @@ def _restructure_qois(
 def process_data_multi_model(
     df_train_features: pd.DataFrame,
     qois_train: Dict[int, Dict[str, List[float]]],
+    df_val_features: pd.DataFrame,
+    qois_val:Dict[int, Dict[str, List[float]]],
     df_test_features: pd.DataFrame,
     qois_test: Dict[int, Dict[str, List[float]]],
     metadata: Dict[str, List[str]]
@@ -136,6 +138,9 @@ def process_data_multi_model(
     # --- 1. Processar Features (X) ---
     print("Processando features de treino (X_train)...")
     X_train_raw, feature_names = _build_feature_array(df_train_features, metadata)
+
+    print("Processando features de validação (X_val)...")
+    X_val_raw, _ = _build_feature_array(df_val_features[df_train_features.columns], metadata)
     
     print("Processando features de teste (X_test)...")
     # Garante que o df_test tenha as colunas na mesma ordem
@@ -145,6 +150,7 @@ def process_data_multi_model(
     # O SCALER FOI REMOVIDO. Usamos os dados "crus".
     X_train_processed = X_train_raw
     X_test_processed = X_test_raw
+    X_val_processed = X_val_raw
     
     print(f"Processamento de X concluído. Shape X_train: {X_train_processed.shape}")
     if X_train_processed.shape[0] > 0:
@@ -155,16 +161,19 @@ def process_data_multi_model(
     print("Reestruturando dados de target (Y) por QoI...")
     
     train_run_numbers = df_train_features['run_number'].tolist()
+    val_run_numbers = df_val_features['run_number'].tolist()
     test_run_numbers = df_test_features['run_number'].tolist()
 
     y_train_per_qoi, train_qoi_names = _restructure_qois(qois_train, train_run_numbers)
+    y_val_per_qoi, val_qoi_names = _restructure_qois(qois_val, val_run_numbers)
     y_test_per_qoi, test_qoi_names = _restructure_qois(qois_test, test_run_numbers)
 
     # --- 4. Garantir Consistência de QoIs ---
     # Garante que ambos os conjuntos (treino e teste) tenham os mesmos QoIs
-    valid_qoi_names = sorted(list(set(train_qoi_names) & set(test_qoi_names)))
+    valid_qoi_names = sorted(list(set(train_qoi_names) & set(test_qoi_names) & set(val_qoi_names)))
     
     final_y_train = {qoi: y_train_per_qoi[qoi] for qoi in valid_qoi_names if qoi in y_train_per_qoi}
+    final_y_val = {qoi: y_val_per_qoi[qoi] for qoi in valid_qoi_names if qoi in y_val_per_qoi}
     final_y_test = {qoi: y_test_per_qoi[qoi] for qoi in valid_qoi_names if qoi in y_test_per_qoi}
     
     # Filtra novamente caso o restructure tenha removido algo
@@ -172,6 +181,7 @@ def process_data_multi_model(
 
     y_scalers = {}
     final_y_train_scaled = {}
+    final_y_val_scaled = {}
     final_y_test_scaled = {}
 
     for qoi in final_valid_qoi_names:
@@ -182,6 +192,9 @@ def process_data_multi_model(
 
         final_y_train_scaled[qoi] = y_scaler.transform(y_train_flat).reshape(final_y_train[qoi].shape)
 
+        y_val_flat = final_y_val[qoi].flatten().reshape(-1, 1)
+        final_y_val_scaled[qoi] = y_scaler.transform(y_val_flat).reshape(final_y_val[qoi].shape)
+
         y_test_flat = final_y_test[qoi].flatten().reshape(-1, 1)
         final_y_test_scaled[qoi] = y_scaler.transform(y_test_flat).reshape(final_y_test[qoi].shape)
     
@@ -190,8 +203,10 @@ def process_data_multi_model(
     return {
         "X_train": X_train_processed,
         "X_test": X_test_processed,
+        "X_val": X_val_processed,
         "y_train_per_qoi": final_y_train_scaled,
         "y_test_per_qoi": final_y_test_scaled,
+        "y_val_per_qoi": final_y_val_scaled,
         "y_scalers": y_scalers,
         "qoi_names": final_valid_qoi_names,
         "feature_names": feature_names
