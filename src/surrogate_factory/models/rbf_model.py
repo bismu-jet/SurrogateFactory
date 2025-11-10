@@ -16,15 +16,15 @@ def build_and_train_rbf(X_train, y_train):
     print("Treinamento do RBF Simples concluído.")
     return rbf_model
 
-def build_and_train_tuned_rbf(X_train, y_train, X_test, y_test, num_tries=1000):
+def build_and_train_tuned_rbf(X_train, y_train, X_val, y_val, num_tries=1000):
     """
     Cria e treina um modelo RBF, procurando os melhores hiperparâmetros (d0, degree)
-    usando os dados de validação (X_test, y_test).
+    usando os dados de validação (X_val, y_val).
     """
     if hasattr(y_train, 'values'): y_train = y_train.values
-    if hasattr(y_test, 'values'): y_test = y_test.values
+    if hasattr(y_val, 'values'): y_val = y_val.values
     if hasattr(X_train, 'values'): X_train = X_train.values
-    if hasattr(X_test, 'values'): X_test = X_test.values
+    if hasattr(X_val, 'values'): X_val = X_val.values
 
     RbfParameters = namedtuple("RbfParameters", ["d0", "degree"])
     trained_models = {}
@@ -48,10 +48,10 @@ def build_and_train_tuned_rbf(X_train, y_train, X_test, y_test, num_tries=1000):
                 temp_model.train()
 
                 # Avalia o erro nos dados de TESTE
-                y_pred_test = temp_model.predict_values(X_test)
+                y_pred_val = temp_model.predict_values(X_val)
                 
                 # Usa RMSE como métrica de erro (menor é melhor)
-                error = np.sqrt(np.mean((y_pred_test - y_test)**2))
+                error = np.sqrt(np.mean((y_pred_val - y_val)**2))
 
                 trained_models[params] = temp_model
                 errors[params] = error
