@@ -2,27 +2,12 @@ import numpy as np
 from smt.surrogate_models import RBF
 from collections import namedtuple
 
-def build_and_train_rbf(X_train, y_train):
+def _build_and_tune_single_rbf(X_train, y_train_scalar, X_val, y_val_scalar, num_tries=100):
     """
     Cria e treina um modelo RBF simples (sem tuning) para regressão.
     """
-    if hasattr(y_train, 'values'):
-        y_train = y_train.values
-
-    rbf_model = RBF(print_global=False, d0=1, poly_degree=0) # Usando defaults simples
-    rbf_model.set_training_values(X_train, y_train)
-    print("--- Treinando o Modelo RBF Simples ---")
-    rbf_model.train()
-    print("Treinamento do RBF Simples concluído.")
-    return rbf_model
-
-def build_and_train_tuned_rbf(X_train, y_train, X_val, y_val, num_tries=1000):
-    """
-    Cria e treina um modelo RBF, procurando os melhores hiperparâmetros (d0, degree)
-    usando os dados de validação (X_val, y_val).
-    """
-    if hasattr(y_train, 'values'): y_train = y_train.values
-    if hasattr(y_val, 'values'): y_val = y_val.values
+    if hasattr(y_train_scalar, 'values'): y_train_scalar = y_train_scalar.values
+    if hasattr(y_val_scalar, 'values'): y_val_scalar = y_val_scalar.values
     if hasattr(X_train, 'values'): X_train = X_train.values
     if hasattr(X_val, 'values'): X_val = X_val.values
 
@@ -32,50 +17,78 @@ def build_and_train_tuned_rbf(X_train, y_train, X_val, y_val, num_tries=1000):
     best_params = None
     smallest_error = float('inf')
 
-    # Define as distâncias e graus a serem testados
     distances = np.geomspace(1, 100000.0, num=num_tries)
-    degrees = [0]
+    degrees= [-1,0,1]
 
-    print(f"--- Iniciando Tuning do RBF (Testando {len(distances) * len(degrees)} combinações) ---")
-
-    for i, d in enumerate(distances):
+    for d in distances:
         for degree in degrees:
             params = RbfParameters(d0=d, degree=degree)
             try:
-                # Cria e treina um modelo RBF com os parâmetros atuais
                 temp_model = RBF(print_global=False, d0=d, poly_degree=degree)
-                temp_model.set_training_values(X_train, y_train)
+                temp_model.set_training_values(X_train, y_train_scalar)
                 temp_model.train()
 
-                # Avalia o erro nos dados de TESTE
                 y_pred_val = temp_model.predict_values(X_val)
-                
-                # Usa RMSE como métrica de erro (menor é melhor)
-                error = np.sqrt(np.mean((y_pred_val - y_val)**2))
+                error = np.sqrt(np.mean((y_pred_val - y_val_scalar)**2))
 
                 trained_models[params] = temp_model
                 errors[params] = error
-
-                # Atualiza o melhor modelo encontrado até agora
-                if error < smallest_error:
-                    smallest_error = error
-                    best_params = params
-                    
             except np.linalg.LinAlgError:
-                 # Ignora combinações que causam erros de álgebra linear (matriz singular)
-                 print(f"    [!] Combinação d0={d:.2f}, degree={degree} falhou. Pulando.")
-                 continue # Pula para a próxima combinação
-
-        # Print de progresso opcional
-        if (i + 1) % (num_tries // 10) == 0:
-             print(f"    Progresso do Tuning: {(i+1)/num_tries*100:.0f}% concluído...")
+                continue
 
     if best_params is None:
-        raise RuntimeError("Tuning do RBF falhou. Nenhuma combinação válida encontrada.")
+        best_params = RbfParameters(d0=1, degree=0)
+        temp_model = RBF(print_global=False, d0=best_params.d0, poly_degree=best_params.degree)
+        temp_model.set_training_values(X_train, y_train_scalar)
+        temp_model.train()
+        trained_models[best_params] = temp_model
 
-    print(f"--- Tuning do RBF concluído ---")
-    print(f"Melhores parâmetros encontrados: d0={best_params.d0:.4f}, degree={best_params.degree}")
-    print(f"Menor erro RMSE na validação: {smallest_error:.4f}")
-
-    # Retorna o melhor modelo encontrado
     return trained_models[best_params]
+
+class RBFVectorModel:
+    """
+    Esta classe agrupa múltiplos modelos RBF (um para cada timestep)
+    para simular um único modelo que prevê um vetor.
+    """
+    def __init__(self):
+        self.models_per_timestep = []
+        self.num_timesteps = 0
+
+    def train(self, X_train, y_train_vector, X_val, y_val_vector):
+        """
+        Treina um modelo RBF separado para cada timestep.
+        
+        y_train_vector e y_val_vector têm shape (num_samples, num_timesteps)
+        """
+        self.models_per_timestep = []
+        self.num_timesteps = y_train_vector.shape[1]
+
+        print(f"--- Treinando {self.num_timesteps} modelos RBF (um por timestep) ---")
+
+        for i in range(self.num_timesteps):
+            y_train_scalar = y_train_vector[:, i]
+            y_val_scalar = y_val_vector[:, i]
+
+            tuned_model = _build_and_tune_single_rbf(
+                X_train, y_train_scalar,
+                X_val, y_val_scalar
+            )
+
+            self.models_per_timestep.append(tuned_model)
+
+        print(f"--- Treinamento dos {self.num_timesteps} modelos concluído ---")
+
+    def predict_values(self, X_sample):
+        """
+        Prevê o vetor de time-series completo para uma nova amostra de entrada X.
+        
+        X_sample tem shape (n_samples, n_features)
+        """
+
+        all_timestep_prediction_arrays = []
+
+        for model in self.models_per_timestep:
+            y_pred_timestep = model.predict_values(X_sample)
+            all_timestep_prediction_arrays.append(y_pred_timestep)
+
+        return np.hstack(all_timestep_prediction_arrays)

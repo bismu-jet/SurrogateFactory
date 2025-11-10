@@ -147,14 +147,15 @@ def process_data_multi_model(
     X_test_raw, _ = _build_feature_array(df_test_features[df_train_features.columns], metadata)
 
     # --- 2. Escalonar Features (X) ---
-    # O SCALER FOI REMOVIDO. Usamos os dados "crus".
-    X_train_processed = X_train_raw
-    X_test_processed = X_test_raw
-    X_val_processed = X_val_raw
+    x_scaler = MinMaxScaler()
+    X_train_scaled = x_scaler.fit_transform(X_train_raw)
+    X_val_scaled = x_scaler.transform(X_val_raw)
+    X_test_scaled = x_scaler.transform(X_test_raw)
     
-    print(f"Processamento de X concluído. Shape X_train: {X_train_processed.shape}")
-    if X_train_processed.shape[0] > 0:
-        print(f"Exemplo de dados X_train (primeira linha, crus): {X_train_processed[0]}")
+    print(f"Processamento de X concluído. Shape X_train: {X_train_raw.shape}")
+    if X_train_raw.shape[0] > 0:
+        print(f"Exemplo de dados X_train (primeira linha, crus): {X_train_raw[0]}")
+        print(f"Exemplo de dados X_train (primeira linha, escalada): {X_train_scaled[0]}")
 
 
     # --- 3. Processar Targets (Y) ---
@@ -201,13 +202,22 @@ def process_data_multi_model(
     print(f"Processamento concluído. Encontrados {len(final_valid_qoi_names)} QoIs consistentes.")
 
     return {
-        "X_train": X_train_processed,
-        "X_test": X_test_processed,
-        "X_val": X_val_processed,
+        # --- Features (X) ---
+        "X_train_raw": X_train_raw,         # Dados crus
+        "X_val_raw": X_val_raw,
+        "X_test_raw": X_test_raw,
+        "X_train_scaled": X_train_scaled,   # Dados escalados [0, 1]
+        "X_val_scaled": X_val_scaled,
+        "X_test_scaled": X_test_scaled,
+        "x_scaler": x_scaler,               # O scaler de features (fitado)
+        
+        # --- Targets (Y) ---
         "y_train_per_qoi": final_y_train_scaled,
-        "y_test_per_qoi": final_y_test_scaled,
         "y_val_per_qoi": final_y_val_scaled,
-        "y_scalers": y_scalers,
+        "y_test_per_qoi": final_y_test_scaled,
+        "y_scalers": y_scalers,             # Dicionário de scalers de targets
+        
+        # --- Metadados ---
         "qoi_names": final_valid_qoi_names,
         "feature_names": feature_names
     }
