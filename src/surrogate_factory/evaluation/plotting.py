@@ -33,7 +33,6 @@ def plot_target_timeseries(y_data: np.ndarray, num_to_plot: int = 5, save_path: 
     """
     plt.figure(figsize=(12, 6))
     
-    # Garante que não tentaremos plotar mais amostras do que temos
     num_to_plot = min(num_to_plot, len(y_data))
     
     for i in range(num_to_plot):

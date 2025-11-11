@@ -22,5 +22,7 @@ htmlcov/
 
 Data Pipeline/
 
+Scripts/
+
 .DS_Store  # macOS
 Thumbs.db  # Windows
