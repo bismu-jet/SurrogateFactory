@@ -1,3 +1,8 @@
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, message=".*multiple x input features have the same value.*")
+# Ignora o aviso de divisão por zero do Kriging (lidamos com isso no try/except)
+warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*divide by zero encountered in log10.*")
+
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -11,10 +16,11 @@ from parsers.esss_json_parser import (
     _parse_single_sa_summary
 )
 from preprocessing.processor import process_data_multi_model
-from models.rbf_model import build_and_train_tuned_rbf
-from models.kriging_model import KrigingVectorModel
 
-from models.neural_network import build_model
+from models.rbf_model import RBFVectorModel
+from models.kriging_model import KrigingVectorModel
+from models.neural_network import NeuralNetworkModel
+
 from evaluation.plotting import plot_feature_distribution, plot_target_timeseries
 from evaluation.plotting import plot_comparison_timeseries
 
@@ -108,14 +114,22 @@ try:
         metadata=metadata
     )
 
-    X_train = processed_data["X_train"]
-    X_test = processed_data["X_test"]
-    X_val = processed_data["X_val"]
+    X_train_raw = processed_data["X_train_raw"]
+    X_val_raw = processed_data["X_val_raw"]
+    X_test_raw = processed_data["X_test_raw"]
+
+    X_train_scaled = processed_data["X_train_scaled"]
+    X_val_scaled = processed_data["X_val_scaled"]
+    X_test_scaled = processed_data["X_test_scaled"]
+
+    x_scaler = processed_data["x_scaler"]
+    y_scalers = processed_data["y_scalers"]
+
     y_train_per_qoi = processed_data["y_train_per_qoi"]
     y_val_per_qoi = processed_data["y_val_per_qoi"]
     y_test_per_qoi = processed_data["y_test_per_qoi"]
+
     qoi_names = processed_data["qoi_names"]
-    y_scalers = processed_data["y_scalers"]
     
     test_indices_map = pd.Series(
         df_test_features['run_number'].values, 
@@ -123,10 +137,10 @@ try:
     )
 
     print(f"Dados prontos. {len(qoi_names)} QoIs encontrados.")
-    print(f"Formato de X_train: {X_train.shape}, Formato de X_test: {X_test.shape}")
+    print(f"Formato de X_train: {X_train_raw.shape}, Formato de X_test: {X_test_raw.shape}, Formato de X_val: {X_val_raw.shape}")
 
     
-    print("\n--- Etapa 5: Treinamento Multi-Modelo (RBF c/ Tuning) ---")
+    print("\n--- Etapa 5: Treinamento Multi-Modelo (Kriging c/ Tuning) ---")
     
     trained_models = {}
 
@@ -142,8 +156,8 @@ try:
             # Nota: X_train e X_test já estão escalados (MinMax)
             surrogate_model = KrigingVectorModel()
             surrogate_model.train(
-                X_train, y_train_qoi,
-                X_val,y_val_per_qoi[qoi_name]
+                X_train_raw, y_train_qoi,
+                X_val_raw,y_val_per_qoi[qoi_name]
             )
 
             trained_models[qoi_name] = surrogate_model
@@ -159,13 +173,13 @@ try:
     # --- ETAPA 6 ATUALIZADA: Avaliação e Comparação Visual ---
     print("\n--- Etapa 6: Avaliação e Comparação Visual (Loop por QoI) ---")
         
-    if len(X_test) > 0 and trained_models:
+    if len(X_test_raw) > 0 and trained_models:
         # Pega o primeiro run do nosso conjunto de teste para a comparação
         sample_to_compare_idx = 0
         run_number_to_compare = test_indices_map[sample_to_compare_idx]
         
         # Prepara o X_sample (é o mesmo para todos os modelos)
-        x_sample = X_test[[sample_to_compare_idx]]
+        x_sample = X_test_raw[[sample_to_compare_idx]]
 
         # Carrega o arquivo do modelo antigo UMA VEZ
         project_name = RUN_DATA_FILE.stem.replace('.runs-specs', '')
@@ -201,14 +215,13 @@ try:
                     y_pred_old=y_pred_old, 
                     run_number=run_number_to_compare,
                     qoi_name=qoi_name,
-                    # Passa o novo rótulo para o gráfico
                     new_model_label="Previsão do Novo Modelo (Kriging Tuned)"
                 )
             else:
                 print(f"AVISO: Não foi possível encontrar o QoI '{qoi_name}' no 'surrogate_summary.json' (modelo antigo).")
     
     elif not trained_models:
-        print("Nenhum modelo RBF foi treinado com sucesso. Pulando etapa de avaliação.")
+        print("Nenhum modelo foi treinado com sucesso. Pulando etapa de avaliação.")
 
     print("\n--- PIPELINE CONCLUÍDA COM SUCESSO ---")
 
