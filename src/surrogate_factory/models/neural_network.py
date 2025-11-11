@@ -3,10 +3,10 @@ Módulo para construção de arquiteturas de modelos de redes neurais.
 """
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Input
-from tensorflow.keras.layers import Dropout
+from tensorflow.keras.layers import Dense, Input, Dropout
+from tensorflow.keras.callbacks import EarlyStopping
 
-def build_model(input_shape: int, output_shape: int) -> tf.keras.Model:
+def _build_model(input_shape: int, output_shape: int) -> tf.keras.Model:
     """
     Constrói e compila um modelo de rede neural (MLP) para regressão.
 
@@ -39,3 +39,55 @@ def build_model(input_shape: int, output_shape: int) -> tf.keras.Model:
     )
     
     return model
+
+class NeuralNetworkModel:
+    """
+    Esta classe agrupa um único modelo Keras para prever um vetor de saída,
+    mantendo uma interface consistente de .train() e .predict_values().
+    """
+
+    def __init__(self):
+        self.model: tf.keras.Model = None
+        self.epochs = 200
+        self.batch_size = 32
+        self.validation_patience = 20
+
+    def train(self, X_train, y_train_vector, X_val, y_val_vector):
+        """
+        Treina um único modelo Keras para prever o vetor de saída completo.
+        
+        Nota: Esta classe espera que X_train e X_val já estejam ESCALADOS.
+        """
+
+        input_shape = X_train.shape[1]
+        output_shape = y_train_vector.shape[1]
+
+        self.model = _build_model(input_shape, output_shape)
+
+        early_stop_callback = EarlyStopping(
+            monitor='val_loss',
+            patience=self.validation_patience,
+            restore_best_weights=True
+        )
+        print(f"--- Treinando Modelo de Rede Neural (para {output_shape} timesteps) ---")
+
+        self.model.fit(
+            X_train,
+            y_train_vector,
+            validation_data=(X_val, y_val_vector),
+            epochs=self.epochs,
+            batch_size=self.batch_size,
+            callbacks=[early_stop_callback],
+            verbose=0
+        )
+        
+        print(f"--- Treinamento da Rede Neural concluído ---")
+
+    def predict_values(self, X_sample):
+        """
+        Prevê o vetor de time-series completo para uma nova amostra de entrada X.
+        """
+
+        if self.model is None:
+            raise RuntimeError("modelo ainda não foi treinado, Chame .train() primeiro")
+        return self.model.predict(X_sample)
