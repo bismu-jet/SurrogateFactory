@@ -72,7 +72,13 @@ def plot_comparison_timeseries(
     plt.legend()
     plt.grid(True, which='both', linestyle='--', linewidth=0.5)
     
-    qoi_name_safe = "_".join(qoi_name.split(' ')[:3]).replace('-', '_')
+    qoi_name_safe = str(qoi_name)\
+        .replace(' ', '_')\
+        .replace(':', '')\
+        .replace('/', '-')\
+        .replace('\\', '-')\
+        .replace('(', '')\
+        .replace(')', '')
     final_save_path = f"{save_path_prefix}_run_{run_number}_qoi_{qoi_name_safe}.png"
 
     import os
