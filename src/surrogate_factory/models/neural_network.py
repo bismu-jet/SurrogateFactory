@@ -49,7 +49,7 @@ class NeuralNetworkModel:
     def __init__(self):
         self.model: tf.keras.Model = None
         self.epochs = 200
-        self.batch_size = 32
+        self.batch_size = 18
         self.validation_patience = 20
 
     def train(self, X_train, y_train_vector, X_val, y_val_vector):
