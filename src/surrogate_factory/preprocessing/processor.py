@@ -1,9 +1,5 @@
 """
 Módulo de pré-processamento de dados para a arquitetura multi-modelo.
-
-LÓGICA DO PROJETO 2:
-- O scaling (MinMaxScaler) FOI REMOVIDO, pois o modelo RBF
-  e seu ajuste de hiperparâmetros (d0) esperam os dados crus.
 """
 
 import numpy as np
@@ -23,7 +19,8 @@ def _build_feature_array(
     categorical_cols = list(metadata.keys())
     
     # Pega todas as colunas que não são 'run_number'
-    all_feature_names = [col for col in features_df.columns if col != 'run_number']
+    cols_to_ignore = ['run_id', 'run_number']
+    all_feature_names = [col for col in features_df.columns if col not in cols_to_ignore]
     
     # Garante uma ordem consistente: categóricas primeiro, depois numéricas
     ordered_feature_names = [col for col in all_feature_names if col in categorical_cols]
@@ -59,7 +56,7 @@ def _build_feature_array(
 
 def _restructure_qois(
     qois_per_run: Dict[int, Dict[str, List[float]]],
-    run_numbers: List[int]
+    run_ids: List[int]
 ) -> Tuple[Dict[str, np.ndarray], List[str]]:
     """
     Transforma o dicionário de QoIs de [run][qoi] para [qoi][runs].
@@ -81,11 +78,15 @@ def _restructure_qois(
     valid_qoi_names_final = set(all_qoi_names)
 
     # 4. Coletar os dados
-    for run_num in run_numbers:
-        if run_num not in qois_per_run:
-            continue
+    for run_id in run_ids:
+        run_id_str = str(run_id)
+        if run_id_str not in qois_per_run:
+            if isinstance(run_id,int) and run_id in qois_per_run:
+                run_id_str = run_id
+            else:
+                continue
             
-        run_qoi_data = qois_per_run[run_num]
+        run_qoi_data = qois_per_run[run_id_str]
         
         for qoi_name in all_qoi_names:
             if qoi_name not in valid_qoi_names_final:
@@ -98,7 +99,7 @@ def _restructure_qois(
                 y_per_qoi[qoi_name].append(np.array(qoi_vector))
             elif qoi_name in valid_qoi_names_final:
                 # Se um run não tem um QoI, esse QoI é inválido para todos
-                print(f"AVISO: QoI '{qoi_name}' não encontrado no Run #{run_num}. Excluindo este QoI do dataset.")
+                print(f"AVISO: QoI '{qoi_name}' não encontrado no Run #{run_id}. Excluindo este QoI do dataset.")
                 valid_qoi_names_final.remove(qoi_name)
                 del y_per_qoi[qoi_name] # Remove dos dados de saída
 
@@ -119,6 +120,14 @@ def _restructure_qois(
     final_qoi_names = sorted(list(final_y_per_qoi.keys()))
             
     return final_y_per_qoi, final_qoi_names
+
+def _get_id_list(df: pd.DataFrame) -> List[Any]:
+    if 'run_id' in df.columns:
+        return df['run_id'].tolist()
+    elif 'run_number' in df.columns:
+        return df['run_number'].tolist()
+    else:
+        return[]
 
 
 def process_data_multi_model(
@@ -161,13 +170,13 @@ def process_data_multi_model(
     # --- 3. Processar Targets (Y) ---
     print("Reestruturando dados de target (Y) por QoI...")
     
-    train_run_numbers = df_train_features['run_number'].tolist()
-    val_run_numbers = df_val_features['run_number'].tolist()
-    test_run_numbers = df_test_features['run_number'].tolist()
+    train_run_ids = _get_id_list(df_train_features)
+    val_run_ids = _get_id_list(df_val_features)
+    test_run_ids = _get_id_list(df_test_features)
 
-    y_train_per_qoi, train_qoi_names = _restructure_qois(qois_train, train_run_numbers)
-    y_val_per_qoi, val_qoi_names = _restructure_qois(qois_val, val_run_numbers)
-    y_test_per_qoi, test_qoi_names = _restructure_qois(qois_test, test_run_numbers)
+    y_train_per_qoi, train_qoi_names = _restructure_qois(qois_train, train_run_ids)
+    y_val_per_qoi, val_qoi_names = _restructure_qois(qois_val, val_run_ids)
+    y_test_per_qoi, test_qoi_names = _restructure_qois(qois_test, test_run_ids)
 
     # --- 4. Garantir Consistência de QoIs ---
     # Garante que ambos os conjuntos (treino e teste) tenham os mesmos QoIs
