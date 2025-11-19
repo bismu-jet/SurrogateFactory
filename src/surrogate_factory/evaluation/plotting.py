@@ -33,7 +33,6 @@ def plot_target_timeseries(y_data: np.ndarray, num_to_plot: int = 5, save_path: 
     """
     plt.figure(figsize=(12, 6))
     
-    # Garante que não tentaremos plotar mais amostras do que temos
     num_to_plot = min(num_to_plot, len(y_data))
     
     for i in range(num_to_plot):
@@ -63,7 +62,9 @@ def plot_comparison_timeseries(
     plt.figure(figsize=(15, 7))
     plt.plot(y_true, label='Resultado Real (Ground Truth)', color='black', linewidth=2.5, alpha=0.8)
     plt.plot(y_pred_new, label=f'{new_model_label}', color='blue', linestyle='--', linewidth=2)
-    plt.plot(y_pred_old, label='Previsão do Modelo Antigo (RBF)', color='red', linestyle=':', linewidth=2)
+
+    if y_pred_old is not None:
+        plt.plot(y_pred_old, label='Previsão do Modelo Antigo (RBF)', color='red', linestyle=':', linewidth=2)
     
     plt.title(f'Comparação de Modelos para o Run #{run_number}\nQoI: {qoi_name}')
     plt.xlabel('Passos de Tempo Concatenados')
@@ -71,8 +72,17 @@ def plot_comparison_timeseries(
     plt.legend()
     plt.grid(True, which='both', linestyle='--', linewidth=0.5)
     
-    qoi_name_safe = "_".join(qoi_name.split(' ')[:3]).replace('-', '_')
+    qoi_name_safe = str(qoi_name)\
+        .replace(' ', '_')\
+        .replace(':', '')\
+        .replace('/', '-')\
+        .replace('\\', '-')\
+        .replace('(', '')\
+        .replace(')', '')
     final_save_path = f"{save_path_prefix}_run_{run_number}_qoi_{qoi_name_safe}.png"
+
+    import os
+    os.makedirs(os.path.dirname(final_save_path) or '.', exist_ok=True)
     
     plt.savefig(final_save_path)
     plt.close()
