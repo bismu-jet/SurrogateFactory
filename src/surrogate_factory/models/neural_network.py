@@ -35,7 +35,8 @@ def _build_model(input_shape: int, output_shape: int) -> tf.keras.Model:
     
     model.compile(
         optimizer='adam',
-        loss='mean_squared_error'
+        loss='mean_squared_error',
+        metrics=['mae']
     )
     
     return model

@@ -6,6 +6,10 @@ import numpy as np
 import pandas as pd
 from typing import Dict, List, Any, Tuple, Set
 from sklearn.preprocessing import MinMaxScaler
+from sklearn.decomposition import PCA
+import joblib
+from pathlib import Path
+
 
 def _build_feature_array(
     features_df: pd.DataFrame, 
@@ -230,3 +234,46 @@ def process_data_multi_model(
         "qoi_names": final_valid_qoi_names,
         "feature_names": feature_names
     }
+
+class OutputCompressor:
+    def __init__(self, n_components=0.99):
+        """
+        n_components: Se float (ex: 0.99), mantém 99% da variância.
+                      Se int (ex: 3), mantém exatamente 3 componentes.
+        """
+        self.model = PCA(n_components=n_components)
+        self.is_fitted = False
+
+    def fit_transform(self, Y_raw):
+        """
+        Y_raw: Matriz (n_samples, n_timesteps) - Ex: (50, 100)
+        Retorna: Z_latente (n_samples, n_components) - Ex: (50, 3)
+        """
+        print(f"Treinando PCA na saída de shape {Y_raw.shape}...")
+        Z = self.model.fit_transform(Y_raw)
+        self.is_fitted = True
+        
+        explained_var = np.sum(self.model.explained_variance_ratio_)
+        print(f"PCA reduziu para {self.model.n_components_} componentes.")
+        print(f"Variância explicada acumulada: {explained_var:.4f}")
+        
+        return Z
+    
+    def transform(self, Y_raw):
+        """
+        Aplica a transformação aprendida em novos dados sem re-treinar.
+        Uso: Validação, Teste e Predição em produção.
+        """
+        if not self.is_fitted:
+            raise RuntimeError("O compressor precisa ser treinado (fit) antes de transformar novos dados.")
+        
+        return self.model.transform(Y_raw)
+
+    def inverse_transform(self, Z_latente):
+        """
+        Reconstrói a série temporal a partir dos componentes latentes.
+        Decoder: Z -> Y
+        """
+        if not self.is_fitted:
+            raise RuntimeError("O compressor precisa ser treinado antes de inverter.")
+        return self.model.inverse_transform(Z_latente)
