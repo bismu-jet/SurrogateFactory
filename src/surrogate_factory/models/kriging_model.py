@@ -15,7 +15,7 @@ def _build_and_tune_single_kriging(X_train, y_train_scalar, X_val, y_val_scalar)
     best_params = None
     smallest_error = float('inf')
     polynomials = ['constant', 'linear', 'quadratic']
-    correlations = ['squar_exp', 'abs_exp', 'matern52', 'matern32']
+    correlations = ['matern32']
 
     for poly in polynomials:
         for corr in correlations:

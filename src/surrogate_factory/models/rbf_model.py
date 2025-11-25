@@ -51,32 +51,81 @@ class RBFVectorModel:
     para simular um único modelo que prevê um vetor.
     """
     def __init__(self):
-        self.models_per_timestep = []
-        self.num_timesteps = 0
+        self.model = None
+        self.best_params = None
+        self._number_of_tryout_distances = 2000
 
     def train(self, X_train, y_train_vector, X_val, y_val_vector):
         """
         Treina um modelo RBF separado para cada timestep.
         
-        y_train_vector e y_val_vector têm shape (num_samples, num_timesteps)
+        Args:
+            X_train: Inputs de treino (normalizados).
+            y_train_vector: Vetor de saída de treino (n_samples, n_timesteps).
+            X_val: Inputs de validação (normalizados).
+            y_val_vector: Vetor de saída de validação.
         """
-        self.models_per_timestep = []
-        self.num_timesteps = y_train_vector.shape[1]
+        print(f"--- Iniciando Tuning do RBF Nativo (Output Shape: {y_train_vector.shape}) ---")
+        
+        RbfParameters = namedtuple("RbfParameters", ["d0", "degree"])
 
-        print(f"--- Treinando {self.num_timesteps} modelos RBF (um por timestep) ---")
+        trained_models = {}
+        errors = {}
 
-        for i in range(self.num_timesteps):
-            y_train_scalar = y_train_vector[:, i]
-            y_val_scalar = y_val_vector[:, i]
+        distances = np.geomspace(1, 1000, num=self._number_of_tryout_distances)
+        degrees = [-1, 0, 1]
 
-            tuned_model = _build_and_tune_single_rbf(
-                X_train, y_train_scalar,
-                X_val, y_val_scalar
-            )
+        best_error = float('inf')
+        best_id = None
 
-            self.models_per_timestep.append(tuned_model)
+        for d in distances:
+            for degree in degrees:
+                params_id = RbfParameters(d0=d, degree=degree)
+                try:
+                    temp_model = RBF(d0=d, poly_degree=degree, print_global=False)
 
-        print(f"--- Treinamento dos {self.num_timesteps} modelos concluído ---")
+                    temp_model.set_training_values(X_train, y_train_vector)
+                    temp_model.train()
+
+                    y_pred_val = temp_model.predict_values(X_val)
+
+                    current_total_error = 0.0
+
+                    for i in range(len(y_val_vector)):
+                        prediction = y_pred_val[i]
+                        validation = y_val_vector[i]
+
+                        abs_norm = np.linalg.norm(prediction - validation)
+                        norm = np.linalg.norm(validation)
+
+                        if norm > 0.0:
+                            current_total_error += float(abs_norm/norm)
+                        else:
+                            current_total_error += float(abs_norm)
+                        
+                        relative_error_metric = current_total_error / len(y_val_vector)
+                        trained_models[params_id]= temp_model
+
+                        if relative_error_metric < best_error:
+                            best_error = relative_error_metric
+                            best_id = params_id
+
+                except Exception as e:
+                    continue
+
+        if best_id is None:
+            print("AVISO: Tuning falhou. Usando parâmetros padrão.")
+            best_id = RbfParameters(d0=1.0, degree=0)
+            temp_model = RBF(d0=1.0, poly_degree=0, print_global=False)
+            temp_model.set_training_values(X_train, y_train_vector)
+            temp_model.train()
+            self.model = temp_model
+        else:
+            self.model = trained_models[best_id]
+        
+        self.best_params = best_id
+        
+        print(f"--- Melhor RBF encontrado: d0={best_id.d0:.4f}, degree={best_id.degree} (RMSE Val: {best_error:.6f}) ---")
 
     def predict_values(self, X_sample):
         """
@@ -85,10 +134,7 @@ class RBFVectorModel:
         X_sample tem shape (n_samples, n_features)
         """
 
-        all_timestep_prediction_arrays = []
-
-        for model in self.models_per_timestep:
-            y_pred_timestep = model.predict_values(X_sample)
-            all_timestep_prediction_arrays.append(y_pred_timestep)
-
-        return np.hstack(all_timestep_prediction_arrays)
+        if self.model is None:
+            raise RuntimeError("Modelo RBF ainda não foi treinado.")
+        
+        return self.model.predict_values(X_sample)

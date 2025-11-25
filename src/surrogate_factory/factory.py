@@ -8,13 +8,14 @@ import warnings
 import pickle
 
 from .parsers.general_parser import load_standard_format
-from .preprocessing.processor import process_data_multi_model
+from .preprocessing.processor import process_data_multi_model, OutputCompressor
 
 from .models.kriging_model import KrigingVectorModel
 from .models.neural_network import NeuralNetworkModel
 from .models.rbf_model import RBFVectorModel
 
 from .evaluation.plotting import plot_comparison_timeseries
+from .evaluation.metrics import calculate_r2, calculate_rmse
 
 class ModelType(Enum):
     KRIGING = "Kriging"
@@ -46,6 +47,26 @@ class SurrogateFactory:
 
         warnings.filterwarnings("ignore", category=RuntimeWarning)
         warnings.filterwarnings("ignore", category=UserWarning)
+
+    def set_data(self, features_df: pd.DataFrame, qois_dict: dict):
+        """
+        Define os dados manualmente.
+        
+        Args:
+            features_df (pd.DataFrame): DataFrame com as features. Deve ter 'run_id' ou 'run_number'.
+            qois_dict (dict): Dicionário de targets {run_id: {qoi_name: vetor}}.
+        """
+        if 'run_number' in features_df.columns and 'run_id' not in features_df.columns:
+            features_df = features_df.rename(columns={'run_number': 'run_id'})
+        if 'run_id' not in features_df.columns:
+            raise KeyError("O dataframe fornecido precisa de uma coluna 'run_id'")
+        
+        features_df['run_id'] = features_df['run_id'].astype(str)
+        self._df_features_raw = features_df
+
+        self._qois_raw = {str(k): v for k, v in qois_dict.items()}
+
+        self._all_runs_ids = self._df_features_raw['run_id'].unique()
 
     def load_data(self, features_path:str | Path, targets_path: str | Path, metadata_path: str | Path = None):
         """
@@ -152,11 +173,22 @@ class SurrogateFactory:
 
         print(f"Processamento concluído. {len(self.qoi_names)} QoI(s) encontrados: {self.qoi_names}")
 
+        
+
         self.trained_models_per_qoi = {}
+        self.compressors_per_qoi = {}
 
         for qoi_name in self.qoi_names:
             y_train_qoi = self.processed_data["y_train_per_qoi"][qoi_name]
             y_val_qoi = self.processed_data["y_val_per_qoi"][qoi_name]
+
+            #PCA compression for qoi
+            compressor = OutputCompressor(n_components=0.99) # you can set the variance that you want to be captured by the PCA here
+            
+            Z_train_qoi = compressor.fit_transform(y_train_qoi)
+            Z_val_qoi = compressor.transform(y_val_qoi)
+
+            self.compressors_per_qoi[qoi_name] = compressor
 
             print(f"\n--- Treinando Modelo {self.model_type.value} para o QoI: {qoi_name} ---")
 
@@ -164,22 +196,22 @@ class SurrogateFactory:
                 if self.model_type == ModelType.KRIGING:
                     model = KrigingVectorModel()
                     model.train(
-                        self.processed_data["X_train_raw"], y_train_qoi,
-                        self.processed_data["X_val_raw"], y_val_qoi
+                        self.processed_data["X_train_raw"], Z_train_qoi,
+                        self.processed_data["X_val_raw"], Z_val_qoi
                     )
                 
                 elif self.model_type == ModelType.RBF:
                     model = RBFVectorModel()
                     model.train(
-                        self.processed_data["X_train_raw"], y_train_qoi,
-                        self.processed_data["X_val_raw"], y_val_qoi
+                        self.processed_data["X_train_raw"], Z_train_qoi,
+                        self.processed_data["X_val_raw"], Z_val_qoi
                     )
 
                 elif self.model_type == ModelType.NN:
                     model = NeuralNetworkModel()
                     model.train(
-                        self.processed_data["X_train_scaled"], y_train_qoi,
-                        self.processed_data["X_val_scaled"], y_val_qoi
+                        self.processed_data["X_train_scaled"], Z_train_qoi,
+                        self.processed_data["X_val_scaled"], Z_val_qoi
                     )
 
                 self.trained_models_per_qoi[qoi_name] = model
@@ -196,6 +228,8 @@ class SurrogateFactory:
         else:
             X_test_data = self.processed_data["X_test_raw"]
 
+        global_metrics = {qoi: {'rmse': [], 'r2': []} for qoi in self.qoi_names}
+
         if len(X_test_data) == 0:
             print("WARNING: Test data is empty. skipping evaluation")
             return
@@ -207,24 +241,57 @@ class SurrogateFactory:
                 if qoi_name not in self.trained_models_per_qoi:
                     continue
                 model = self.trained_models_per_qoi[qoi_name]
-                y_scaler = self.y_scalers[qoi_name]
+                compressor = self.compressors_per_qoi[qoi_name]
 
-                y_true_scaled = self.processed_data["y_test_per_qoi"][qoi_name][sample_idx]
-                y_true = y_scaler.inverse_transform(y_true_scaled.reshape(-1, 1)).flatten()
+                y_true = self.processed_data["y_test_per_qoi"][qoi_name][sample_idx]
+                z_pred = model.predict_values(x_sample)
                 
-                y_pred_scaled = model.predict_values(x_sample)[0]
-                y_pred = y_scaler.inverse_transform(y_pred_scaled.reshape(-1, 1)).flatten()
+                y_pred_reconstructed = compressor.inverse_transform(z_pred)
+                y_true_flat = y_true.flatten()
+                y_pred_flat = y_pred_reconstructed.flatten()
+
+                mask = np.isfinite(y_true_flat) & np.isfinite(y_pred_flat)
+
+                y_true_clean = y_true_flat[mask]
+                y_pred_clean = y_pred_flat[mask]
+
+                if len(y_true_clean) == 0:
+                    print(f"[ALERTA] Run {run_id} | {qoi_name}: Todos os dados são NaN/Inf.")
+                    continue
+
+                try:
+                    rmse = calculate_rmse(y_true_clean,y_pred_clean)
+                    if np.var(y_true_clean) < 1e-9:
+                        r2 = 1.0 if rmse < 1e-5 else 0.0
+                    else:
+                        r2 = calculate_r2(y_true_clean, y_pred_clean)
+                    global_metrics[qoi_name]['rmse'].append(rmse)
+                    global_metrics[qoi_name]['r2'].append(r2)
+
+                except Exception as e:
+                    print(f"Erro ao calcular métrica para {run_id}: {e}")
 
                 plot_comparison_timeseries(
-                    y_true=y_true,
-                    y_pred_new=y_pred,
+                    y_true=y_true_flat,
+                    y_pred_new=y_pred_flat,
                     y_pred_old=None,
                     run_number=sample_idx,
                     qoi_name=f"{qoi_name} (Run ID: {run_id})",
                     save_path_prefix=plot_prefix,
                     new_model_label=f"Previsão {self.model_type.value}"
                 )
-        print(f"Gráficos de avaliação salvos com prefixo: '{plot_prefix}'")
+        print("\n" + "="*60)
+        print(f"{'QoI NAME':<30} | {'RMSE Médio (std)':<20} | {'R² Médio (std)':<20}")
+        print("-" * 60)
+        for qoi_name, metrics in global_metrics.items():
+            rmse_avg = np.mean(metrics['rmse'])
+            rmse_std = np.std(metrics['rmse'])
+
+            r2_avg = np.mean(metrics['r2'])
+            r2_std = np.std(metrics['r2'])
+            print(f"{qoi_name:<30} | {rmse_avg:.4f} (+-{rmse_std:.4f})   | {r2_avg:.4f} (+-{r2_std:.4f})")
+        
+        print("="*60 + "\n")
 
     def _preprocess_input_features(self, features_df: pd.DataFrame) -> np.ndarray:
         """
@@ -286,23 +353,20 @@ class SurrogateFactory:
         else:
             X_input = X_raw_numpy
 
-        predictions_unscaled = {}
+        predictions_physical = {}
 
         for qoi_name, model in self.trained_models_per_qoi.items():
 
-            y_pred_scaled = model.predict_values(X_input)
-            y_scaler = self.y_scalers[qoi_name]
+            Z_pred = model.predict_values(X_input)
+            if qoi_name not in self.compressors_per_qoi:
+                print(f"AVISO: Compressor para {qoi_name} não encontrado.")
+                continue
+            compressor = self.compressors_per_qoi[qoi_name]
+            Y_pred_reconstructed = compressor.inverse_transform(Z_pred)
 
-            n_samples = y_pred_scaled.shape[0]
-            n_timesteps = y_pred_scaled.shape[1]
-
-            y_pred_flat_scaled = y_pred_scaled.reshape(-1, 1)
-            y_pred_flat_unscaled = y_scaler.inverse_transform(y_pred_flat_scaled)
-            y_pred_unscaled = y_pred_flat_unscaled.reshape(n_samples, n_timesteps)
-
-            predictions_unscaled[qoi_name] = y_pred_unscaled
+            predictions_physical[qoi_name] = Y_pred_reconstructed
         print("--- predição completa ---")
-        return predictions_unscaled
+        return predictions_physical
     
     def save_model(self, file_path: str | Path):
         """
