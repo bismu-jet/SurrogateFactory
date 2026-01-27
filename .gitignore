@@ -1,28 +1,42 @@
-
+# Virtual environments
 venv/
+.venv/
+env/
 *.env
 .env
 
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 
+# IDEs
 .vscode/
 .idea/
 
+# Build artifacts
 build/
 dist/
 *.egg-info/
 *.egg
 
+# Testing
 .pytest_cache/
 .coverage
 htmlcov/
 
+# Project-specific excludes
 Data Pipeline/
-
 Scripts/
 
-.DS_Store  # macOS
-Thumbs.db  # Windows
+# OS files
+.DS_Store
+Thumbs.db
+
+# Generated files - DO NOT COMMIT
+*.png
+*.pkl
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/

@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "surrogate-factory"
+version = "0.1.0"
+description = "A factory for creating surrogate models (Kriging, RBF, Neural Network) for expensive simulations"
+readme = "CLAUDE.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "SurrogateFactory Contributors"}
+]
+keywords = [
+    "surrogate-model",
+    "metamodel",
+    "kriging",
+    "gaussian-process",
+    "rbf",
+    "neural-network",
+    "simulation",
+    "machine-learning"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy>=1.21.0",
+    "pandas>=1.3.0",
+    "scikit-learn>=1.0.0",
+    "smt>=2.0.0",
+    "matplotlib>=3.4.0",
+    "seaborn>=0.11.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/bismu-jet/SurrogateFactory"
+Repository = "https://github.com/bismu-jet/SurrogateFactory"
+Issues = "https://github.com/bismu-jet/SurrogateFactory/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
