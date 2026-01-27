@@ -17,6 +17,9 @@ from .models.rbf_model import RBFVectorModel
 from .evaluation.plotting import plot_comparison_timeseries
 from .evaluation.metrics import calculate_r2, calculate_rmse
 
+import matplotlib.pyplot as plt
+import seaborn as sns
+
 class ModelType(Enum):
     KRIGING = "Kriging"
     RBF = "RBF"
@@ -67,6 +70,10 @@ class SurrogateFactory:
         self._qois_raw = {str(k): v for k, v in qois_dict.items()}
 
         self._all_runs_ids = self._df_features_raw['run_id'].unique()
+
+    def set_reference_data(self, reference_qois):
+        self.reference_qois = {str(k): v for k, v in reference_qois.items()}
+        print(f"dados de referência carregados para {len(reference_qois)} runs")
 
     def load_data(self, features_path:str | Path, targets_path: str | Path, metadata_path: str | Path = None):
         """
@@ -183,7 +190,7 @@ class SurrogateFactory:
             y_val_qoi = self.processed_data["y_val_per_qoi"][qoi_name]
 
             #PCA compression for qoi
-            compressor = OutputCompressor(n_components=0.99) # you can set the variance that you want to be captured by the PCA here
+            compressor = OutputCompressor(n_components=0.999) # you can set the variance that you want to be captured by the PCA here
             
             Z_train_qoi = compressor.fit_transform(y_train_qoi)
             Z_val_qoi = compressor.transform(y_val_qoi)
@@ -228,7 +235,9 @@ class SurrogateFactory:
         else:
             X_test_data = self.processed_data["X_test_raw"]
 
-        global_metrics = {qoi: {'rmse': [], 'r2': []} for qoi in self.qoi_names}
+        global_metrics = {qoi: {'rmse': [], 'r2': [], 'rmse_ref': [], 'r2_ref': []} for qoi in self.qoi_names}
+
+        has_reference = hasattr(self, 'reference_qois') and self.reference_qois
 
         if len(X_test_data) == 0:
             print("WARNING: Test data is empty. skipping evaluation")
@@ -254,6 +263,16 @@ class SurrogateFactory:
 
                 y_true_clean = y_true_flat[mask]
                 y_pred_clean = y_pred_flat[mask]
+                y_pred_ref = None
+
+                if has_reference:
+                    run_data = self.reference_qois.get(str(run_id), {})
+                    y_pred_ref_raw = run_data.get(qoi_name)
+                    
+                    if y_pred_ref_raw is not None:
+                        y_pred_ref = np.array(y_pred_ref_raw).flatten()
+                        min_len = min(len(y_true_flat), len(y_pred_ref))
+                        y_pred_ref = y_pred_ref[:min_len]
 
                 if len(y_true_clean) == 0:
                     print(f"[ALERTA] Run {run_id} | {qoi_name}: Todos os dados são NaN/Inf.")
@@ -271,17 +290,26 @@ class SurrogateFactory:
                 except Exception as e:
                     print(f"Erro ao calcular métrica para {run_id}: {e}")
 
+                if y_pred_ref is not None:
+                    y_true_ref_slice = y_true_flat[:len(y_pred_ref)]
+                    mask_ref = np.isfinite(y_true_ref_slice) & np.isfinite(y_pred_ref)
+                    if np.any(mask_ref):
+                        rmse_ref = calculate_rmse(y_true_ref_slice[mask_ref], y_pred_ref[mask_ref])
+                        r2_ref = calculate_r2(y_true_ref_slice[mask_ref], y_pred_ref[mask_ref])
+                        global_metrics[qoi_name]['rmse_ref'].append(rmse_ref)
+                        global_metrics[qoi_name]['r2_ref'].append(r2_ref)
+
                 plot_comparison_timeseries(
                     y_true=y_true_flat,
                     y_pred_new=y_pred_flat,
-                    y_pred_old=None,
+                    y_pred_old=y_pred_ref,
                     run_number=sample_idx,
                     qoi_name=f"{qoi_name} (Run ID: {run_id})",
                     save_path_prefix=plot_prefix,
                     new_model_label=f"Previsão {self.model_type.value}"
                 )
         print("\n" + "="*60)
-        print(f"{'QoI NAME':<30} | {'RMSE Médio (std)':<20} | {'R² Médio (std)':<20}")
+        print(f"{'QoI NAME':<30} | {'RMSE Médio (std)':<20} | {'R² Médio (std)':<20} | {'Ref R²'}")
         print("-" * 60)
         for qoi_name, metrics in global_metrics.items():
             rmse_avg = np.mean(metrics['rmse'])
@@ -289,9 +317,16 @@ class SurrogateFactory:
 
             r2_avg = np.mean(metrics['r2'])
             r2_std = np.std(metrics['r2'])
-            print(f"{qoi_name:<30} | {rmse_avg:.4f} (+-{rmse_std:.4f})   | {r2_avg:.4f} (+-{r2_std:.4f})")
+
+            if metrics['r2_ref']:
+                r2_r = np.mean(metrics['r2_ref'])
+                ref_str = f"{r2_r:.4f}"
+            else:
+                ref_str = "N/A"
+
+            print(f"{qoi_name:<40} | {rmse_avg:.4f} (+-{rmse_std:.4f}) | {r2_avg:.4f} (+-{r2_std:.4f}) | reference: {ref_str}")
         
-        print("="*60 + "\n")
+        print("="*80 + "\n")
 
     def _preprocess_input_features(self, features_df: pd.DataFrame) -> np.ndarray:
         """
