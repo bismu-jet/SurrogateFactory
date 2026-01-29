@@ -37,6 +37,12 @@ Thumbs.db
 # Generated files - DO NOT COMMIT
 *.png
 *.pkl
+*.csv
+targets.json
+
+# Linter / type-checker caches
+.mypy_cache/
+.ruff_cache/
 
 # Jupyter notebooks checkpoints
 .ipynb_checkpoints/

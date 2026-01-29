@@ -1,47 +1,48 @@
-import pytest
-import numpy as np
-import tensorflow as tf
+"""Tests for the Neural Network surrogate model (sklearn MLPRegressor)."""
 
-import sys
-from pathlib import Path
-src_path = Path(__file__).resolve().parent.parent / 'src'
-sys.path.append(str(src_path))
+import numpy as np
+import pytest
 
 from surrogate_factory.models.neural_network import NeuralNetworkModel
 
-def test_neural_network_model_workflow():
-    """
-    Testa o fluxo completo (train, predict) da NeuralNetworkModel
-    com dados pequenos.
-    """
+NUM_TRAIN_SAMPLES = 20
+NUM_VAL_SAMPLES = 5
+NUM_FEATURES = 2
+NUM_COMPONENTS = 3
 
-    NUM_TRAIN_SAMPLES = 20 
-    NUM_VAL_SAMPLES = 5
-    NUM_FEATURES = 2
-    NUM_TIMESTEPS = 3
 
-    np.random.seed(42)
+@pytest.fixture()
+def random_data():
+    """Generate reproducible random train/val/test arrays."""
+    rng = np.random.RandomState(42)
+    return {
+        "x_train": rng.rand(NUM_TRAIN_SAMPLES, NUM_FEATURES),
+        "y_train": rng.rand(NUM_TRAIN_SAMPLES, NUM_COMPONENTS),
+        "x_val": rng.rand(NUM_VAL_SAMPLES, NUM_FEATURES),
+        "y_val": rng.rand(NUM_VAL_SAMPLES, NUM_COMPONENTS),
+        "x_test": rng.rand(2, NUM_FEATURES),
+    }
 
-    X_train = np.random.rand(NUM_TRAIN_SAMPLES,NUM_FEATURES)
-    y_train_vector = np.random.rand(NUM_TRAIN_SAMPLES,NUM_TIMESTEPS)
 
-    X_val = np.random.rand(NUM_VAL_SAMPLES,NUM_FEATURES)
-    y_val_vector = np.random.rand(NUM_VAL_SAMPLES,NUM_TIMESTEPS)
-
-    X_test_sample = np.random.rand(2, NUM_FEATURES)
-
+def test_train_and_predict(random_data):
+    """Full workflow: train then predict."""
     model = NeuralNetworkModel()
+    model.max_iter = 10  # keep CI fast
 
-    model.epochs=3
-    model.patience=1
+    model.train(
+        random_data["x_train"],
+        random_data["y_train"],
+        random_data["x_val"],
+        random_data["y_val"],
+    )
 
-    model.train(X_train, y_train_vector, X_val, y_val_vector)
+    assert model.model is not None
+    preds = model.predict_values(random_data["x_test"])
+    assert preds.shape == (2, NUM_COMPONENTS)
 
-    y_pred_vector = model.predict_values(X_test_sample)
 
-    assert model.model is not None, "o modelo keras não foi criado"
-    assert isinstance(model.model, tf.keras.Model), "o modelo não é um objeto keras"
-
-    expected_shape = (2, NUM_TIMESTEPS)
-    assert y_pred_vector.shape == expected_shape, \
-        f"Shape da predição está incorreto. Esperado {expected_shape}, mas foi {y_pred_vector.shape}"
+def test_predict_before_train_raises():
+    """Calling predict before train must raise RuntimeError."""
+    model = NeuralNetworkModel()
+    with pytest.raises(RuntimeError, match="not been trained"):
+        model.predict_values(np.zeros((1, NUM_FEATURES)))

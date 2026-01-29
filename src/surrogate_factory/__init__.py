@@ -1,10 +1,10 @@
-"""
-SurrogateFactory - A factory for creating surrogate models for expensive simulations.
+"""SurrogateFactory - A factory for building surrogate models of expensive simulations.
 
-Supports Kriging, RBF, and Neural Network models with PCA-compressed outputs.
+Supports Kriging (Gaussian Process), RBF (Radial Basis Function), and
+Neural Network surrogate models with PCA-compressed time-series outputs.
 """
 
-from .factory import SurrogateFactory, ModelType
+from .factory import ModelType, SurrogateFactory
 
 __version__ = "0.1.0"
-__all__ = ["SurrogateFactory", "ModelType"]
+__all__ = ["ModelType", "SurrogateFactory"]

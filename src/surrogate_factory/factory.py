@@ -1,91 +1,116 @@
-import pandas as pd
-import numpy as np
-from pathlib import Path
-from enum import Enum
-from sklearn.model_selection import train_test_split
+"""Core SurrogateFactory: load data, train, evaluate, predict, and persist surrogate models."""
+
 import json
-import warnings
+import logging
 import pickle
+import warnings
+from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
-from .parsers.general_parser import load_standard_format
-from .preprocessing.processor import process_data_multi_model, OutputCompressor
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
 
+from .evaluation.metrics import calculate_r2, calculate_rmse
+from .evaluation.plotting import plot_comparison_timeseries
 from .models.kriging_model import KrigingVectorModel
 from .models.neural_network import NeuralNetworkModel
 from .models.rbf_model import RBFVectorModel
+from .parsers.general_parser import load_standard_format
+from .preprocessing.processor import OutputCompressor, process_data_multi_model
 
-from .evaluation.plotting import plot_comparison_timeseries
-from .evaluation.metrics import calculate_r2, calculate_rmse
+logger = logging.getLogger(__name__)
 
-import matplotlib.pyplot as plt
-import seaborn as sns
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+
 
 class ModelType(Enum):
+    """Supported surrogate model types."""
+
     KRIGING = "Kriging"
     RBF = "RBF"
     NN = "NeuralNetwork"
 
+
 class SurrogateFactory:
+    """High-level factory for training and serving surrogate models.
 
-    def __init__(self, model_type: ModelType):
+    Usage::
 
+        factory = SurrogateFactory(ModelType.KRIGING)
+        factory.load_data("features.csv", "targets.json")
+        factory.train(test_size=0.2, val_size=0.1)
+        predictions = factory.predict(new_features_df)
+    """
+
+    def __init__(self, model_type: ModelType) -> None:
         if not isinstance(model_type, ModelType):
-            raise ValueError("model_type deve ser um membro de ModelType (ex: ModelType.KRIGING)")
+            raise ValueError(
+                "model_type must be a ModelType member (e.g. ModelType.KRIGING)."
+            )
 
-        self.model_type = model_type
-        self.trained_models_per_qoi = {}
+        self.model_type: ModelType = model_type
+        self.trained_models_per_qoi: Dict[str, Any] = {}
+        self.compressors_per_qoi: Dict[str, OutputCompressor] = {}
 
-        self._df_features_raw = None
-        self._qois_raw = None
-        self._all_runs_ids = None
+        self._df_features_raw: Optional[pd.DataFrame] = None
+        self._qois_raw: Optional[Dict[str, Any]] = None
+        self._all_runs_ids: Optional[np.ndarray] = None
 
-        self.processed_data = {}
-        self.qoi_names = []
-        self.feature_names = []
-        self.x_scaler = None
-        self.y_scalers = {}
-        self.metadata = {}
+        self.processed_data: Dict[str, Any] = {}
+        self.qoi_names: List[str] = []
+        self.feature_names: List[str] = []
+        self.x_scaler: Optional[Any] = None
+        self.y_scalers: Dict[str, Any] = {}
+        self.metadata: Dict[str, List[str]] = {}
+        self.reference_qois: Dict[str, Any] = {}
+        self.test_run_id_map: Optional[pd.Series] = None
 
-        print(f"SurrogateFactory inicializada com o tipo de modelo: {self.model_type.value}")
+        logger.info("SurrogateFactory initialised with model type: %s", self.model_type.value)
 
-        warnings.filterwarnings("ignore", category=RuntimeWarning)
-        warnings.filterwarnings("ignore", category=UserWarning)
+    # ------------------------------------------------------------------
+    # Data loading
+    # ------------------------------------------------------------------
 
-    def set_data(self, features_df: pd.DataFrame, qois_dict: dict):
-        """
-        Define os dados manualmente.
-        
+    def set_data(self, features_df: pd.DataFrame, qois_dict: Dict[str, Any]) -> None:
+        """Set feature and target data directly from in-memory objects.
+
         Args:
-            features_df (pd.DataFrame): DataFrame com as features. Deve ter 'run_id' ou 'run_number'.
-            qois_dict (dict): Dicionário de targets {run_id: {qoi_name: vetor}}.
+            features_df: DataFrame with a ``run_id`` (or ``run_number``) column.
+            qois_dict: ``{run_id: {qoi_name: vector}}`` target dictionary.
         """
-        if 'run_number' in features_df.columns and 'run_id' not in features_df.columns:
-            features_df = features_df.rename(columns={'run_number': 'run_id'})
-        if 'run_id' not in features_df.columns:
-            raise KeyError("O dataframe fornecido precisa de uma coluna 'run_id'")
-        
-        features_df['run_id'] = features_df['run_id'].astype(str)
+        if "run_number" in features_df.columns and "run_id" not in features_df.columns:
+            features_df = features_df.rename(columns={"run_number": "run_id"})
+        if "run_id" not in features_df.columns:
+            raise KeyError("The supplied DataFrame must contain a 'run_id' column.")
+
+        features_df["run_id"] = features_df["run_id"].astype(str)
         self._df_features_raw = features_df
-
         self._qois_raw = {str(k): v for k, v in qois_dict.items()}
+        self._all_runs_ids = self._df_features_raw["run_id"].unique()
 
-        self._all_runs_ids = self._df_features_raw['run_id'].unique()
-
-    def set_reference_data(self, reference_qois):
+    def set_reference_data(self, reference_qois: Dict[str, Any]) -> None:
+        """Attach reference (baseline) predictions for comparative evaluation."""
         self.reference_qois = {str(k): v for k, v in reference_qois.items()}
-        print(f"dados de referência carregados para {len(reference_qois)} runs")
+        logger.info("Reference data loaded for %d runs.", len(reference_qois))
 
-    def load_data(self, features_path:str | Path, targets_path: str | Path, metadata_path: str | Path = None):
-        """
-        Carrega os dados de entrada usando o parser genérico.
-        
+    def load_data(
+        self,
+        features_path: Union[str, Path],
+        targets_path: Union[str, Path],
+        metadata_path: Optional[Union[str, Path]] = None,
+    ) -> None:
+        """Load features, targets, and optional metadata from disk.
+
         Args:
-            features_path (str | Path): Caminho para o arquivo features.csv.
-            targets_path (str | Path): Caminho para o arquivo targets.json.
-            metadata_path (str | Path, opcional): Caminho para o metadata.json (para features categóricas).
+            features_path: Path to the ``features.csv`` file.
+            targets_path: Path to the ``targets.json`` file.
+            metadata_path: Optional path to a ``metadata.json`` for
+                categorical feature encoding.
         """
-
-        print("--- Etapa 1: Carregando Dados ---")
+        logger.info("Loading data.")
         features_path = Path(features_path)
         targets_path = Path(targets_path)
 
@@ -93,94 +118,87 @@ class SurrogateFactory:
         if metadata_path:
             metadata_path = Path(metadata_path)
             if metadata_path.exists():
-                print(f"Carregando dados de {metadata_path}")
-                try:
-                    with open(metadata_path, 'r', encoding='utf-8') as f:
-                        self.metadata = json.load(f)
-                except Exception as e:
-                    print(f"Erro ao tentar ler:{e}")
+                logger.info("Loading metadata from %s.", metadata_path)
+                with open(metadata_path, "r", encoding="utf-8") as fh:
+                    self.metadata = json.load(fh)
             else:
-                print(f"O path '{metadata_path}' não contem o arquivo de metadados.")
+                logger.warning("Metadata file not found at '%s'.", metadata_path)
 
-        try:
-            self._df_features_raw, self._qois_raw = load_standard_format(
-                features_path=features_path,
-                targets_path=targets_path
-            )
-            self._all_runs_ids = self._df_features_raw['run_id'].astype(str).unique()
-            print(f"Dados carregados com sucesso. Encontrados {len(self._all_runs_ids)} runs únicos.")
-        
-        except FileNotFoundError:
-            print(f"ERRO: Arquivos não encontrados em '{features_path}' ou '{targets_path}'")
-            raise
-        except Exception as e:
-            print(f"ERRO ao carregar dados: {e}")
-            raise
+        self._df_features_raw, self._qois_raw = load_standard_format(
+            features_path=features_path,
+            targets_path=targets_path,
+        )
+        self._all_runs_ids = self._df_features_raw["run_id"].astype(str).unique()
+        logger.info("Data loaded successfully. Found %d unique runs.", len(self._all_runs_ids))
 
-    def train(self, test_size=0.2, val_size=0.1, random_state=42):
-        """
-        Divide os dados, pré-processa e treina o(s) modelo(s).
-        
+    # ------------------------------------------------------------------
+    # Training
+    # ------------------------------------------------------------------
+
+    def train(
+        self,
+        test_size: float = 0.2,
+        val_size: float = 0.1,
+        random_state: int = 42,
+    ) -> None:
+        """Split data, preprocess, and train surrogate model(s).
+
         Args:
-            test_size (float): Proporção do dataset a ser usada para teste (ex: 0.2 para 20%).
-            val_size (float): Proporção do dataset *total* a ser usada para validação (ex: 0.1 para 10%).
-            random_state (int): Semente aleatória para reprodutibilidade.
+            test_size: Fraction of the dataset reserved for testing.
+            val_size: Fraction of the *total* dataset reserved for validation.
+            random_state: Random seed for reproducibility.
         """
-        print("\n--- Etapa 2: Dividindo, Processando e Treinando ---")
-
         if self._all_runs_ids is None:
-            raise RuntimeError("Dados não carregados, chame o load_data()")
-        
-        print(f"Dividindo {len(self._all_runs_ids)} runs (teste={test_size}, val={val_size})...")
+            raise RuntimeError("No data loaded. Call load_data() or set_data() first.")
+
+        logger.info(
+            "Splitting %d runs (test=%.2f, val=%.2f).",
+            len(self._all_runs_ids),
+            test_size,
+            val_size,
+        )
         train_val_ids, test_ids = train_test_split(
-            self._all_runs_ids,
-            test_size=test_size,
-            random_state=random_state
+            self._all_runs_ids, test_size=test_size, random_state=random_state
         )
-
-        relative_val_size = val_size / (1.0-test_size)
-
+        relative_val_size = val_size / (1.0 - test_size)
         train_ids, val_ids = train_test_split(
-            train_val_ids,
-            test_size=relative_val_size,
-            random_state=random_state
+            train_val_ids, test_size=relative_val_size, random_state=random_state
+        )
+        logger.info(
+            "Split: %d train, %d validation, %d test.",
+            len(train_ids),
+            len(val_ids),
+            len(test_ids),
         )
 
-        print(f"{len(train_ids)} treino, {len(val_ids)} validação, {len(test_ids)} teste.")
+        df_train = self._df_features_raw[self._df_features_raw["run_id"].isin(train_ids)]
+        df_val = self._df_features_raw[self._df_features_raw["run_id"].isin(val_ids)]
+        df_test = self._df_features_raw[self._df_features_raw["run_id"].isin(test_ids)]
 
-        df_train_features = self._df_features_raw[self._df_features_raw['run_id'].isin(train_ids)]
-        df_val_features = self._df_features_raw[self._df_features_raw['run_id'].isin(val_ids)]
-        df_test_features = self._df_features_raw[self._df_features_raw['run_id'].isin(test_ids)]
+        qois_train = {rid: d for rid, d in self._qois_raw.items() if rid in train_ids}
+        qois_val = {rid: d for rid, d in self._qois_raw.items() if rid in val_ids}
+        qois_test = {rid: d for rid, d in self._qois_raw.items() if rid in test_ids}
 
-        qois_train = {run_id: data for run_id, data in self._qois_raw.items() if run_id in train_ids}
-        qois_val = {run_id: data for run_id, data in self._qois_raw.items() if run_id in val_ids}
-        qois_test = {run_id: data for run_id, data in self._qois_raw.items() if run_id in test_ids}
-
-        print("--- Pré processamento dos dados ---")
-
+        logger.info("Preprocessing data.")
         self.processed_data = process_data_multi_model(
-            df_train_features=df_train_features,
+            df_train_features=df_train,
             qois_train=qois_train,
-            df_val_features=df_val_features,
+            df_val_features=df_val,
             qois_val=qois_val,
-            df_test_features=df_test_features,
+            df_test_features=df_test,
             qois_test=qois_test,
-            metadata=self.metadata
+            metadata=self.metadata,
         )
 
         self.x_scaler = self.processed_data["x_scaler"]
         self.y_scalers = self.processed_data["y_scalers"]
         self.qoi_names = self.processed_data["qoi_names"]
         self.feature_names = self.processed_data["feature_names"]
-
         self.test_run_id_map = pd.Series(
-            df_test_features['run_id'].values,
-            index=range(len(df_test_features))
+            df_test["run_id"].values, index=range(len(df_test))
         )
 
-        print(f"Processamento concluído. {len(self.qoi_names)} QoI(s) encontrados: {self.qoi_names}")
-
-        
+        logger.info("Found %d QoI(s): %s", len(self.qoi_names), self.qoi_names)
 
         self.trained_models_per_qoi = {}
         self.compressors_per_qoi = {}
@@ -189,246 +207,239 @@ class SurrogateFactory:
             y_train_qoi = self.processed_data["y_train_per_qoi"][qoi_name]
             y_val_qoi = self.processed_data["y_val_per_qoi"][qoi_name]
 
-            #PCA compression for qoi
-            compressor = OutputCompressor(n_components=0.999) # you can set the variance that you want to be captured by the PCA here
-            
-            Z_train_qoi = compressor.fit_transform(y_train_qoi)
-            Z_val_qoi = compressor.transform(y_val_qoi)
-
+            compressor = OutputCompressor(n_components=0.999)
+            z_train = compressor.fit_transform(y_train_qoi)
+            z_val = compressor.transform(y_val_qoi)
             self.compressors_per_qoi[qoi_name] = compressor
 
-            print(f"\n--- Treinando Modelo {self.model_type.value} para o QoI: {qoi_name} ---")
-
+            logger.info("Training %s model for QoI: %s", self.model_type.value, qoi_name)
             try:
-                if self.model_type == ModelType.KRIGING:
-                    model = KrigingVectorModel()
-                    model.train(
-                        self.processed_data["X_train_raw"], Z_train_qoi,
-                        self.processed_data["X_val_raw"], Z_val_qoi
-                    )
-                
-                elif self.model_type == ModelType.RBF:
-                    model = RBFVectorModel()
-                    model.train(
-                        self.processed_data["X_train_raw"], Z_train_qoi,
-                        self.processed_data["X_val_raw"], Z_val_qoi
-                    )
-
-                elif self.model_type == ModelType.NN:
-                    model = NeuralNetworkModel()
-                    model.train(
-                        self.processed_data["X_train_scaled"], Z_train_qoi,
-                        self.processed_data["X_val_scaled"], Z_val_qoi
-                    )
-
+                model = self._create_and_train_model(z_train, z_val)
                 self.trained_models_per_qoi[qoi_name] = model
-            except Exception as e:
-                print(f"Erro ao treinar {self.model_type.value} para {qoi_name}: {e}. Pulando este QoI")
-                import traceback
-                traceback.print_exc()
-                continue
-        print("\n --- Treinamento concluido ---")
+            except Exception:
+                logger.exception("Failed to train %s for %s; skipping.", self.model_type.value, qoi_name)
 
-    def evaluate_and_plot(self, plot_prefix="surrogate_comparison"):
-        if self.model_type==ModelType.NN:
-            X_test_data = self.processed_data["X_test_scaled"]
+        logger.info("Training complete.")
+
+    def _create_and_train_model(
+        self,
+        z_train: np.ndarray,
+        z_val: np.ndarray,
+    ) -> Any:
+        """Instantiate and train the appropriate model type."""
+        if self.model_type == ModelType.KRIGING:
+            model = KrigingVectorModel()
+            model.train(
+                self.processed_data["X_train_raw"], z_train,
+                self.processed_data["X_val_raw"], z_val,
+            )
+        elif self.model_type == ModelType.RBF:
+            model = RBFVectorModel()
+            model.train(
+                self.processed_data["X_train_raw"], z_train,
+                self.processed_data["X_val_raw"], z_val,
+            )
+        elif self.model_type == ModelType.NN:
+            model = NeuralNetworkModel()
+            model.train(
+                self.processed_data["X_train_scaled"], z_train,
+                self.processed_data["X_val_scaled"], z_val,
+            )
         else:
-            X_test_data = self.processed_data["X_test_raw"]
+            raise ValueError(f"Unsupported model type: {self.model_type}")
+        return model
 
-        global_metrics = {qoi: {'rmse': [], 'r2': [], 'rmse_ref': [], 'r2_ref': []} for qoi in self.qoi_names}
+    # ------------------------------------------------------------------
+    # Evaluation
+    # ------------------------------------------------------------------
 
-        has_reference = hasattr(self, 'reference_qois') and self.reference_qois
+    def evaluate_and_plot(self, plot_prefix: str = "surrogate_comparison") -> None:
+        """Evaluate on the held-out test set and generate comparison plots."""
+        x_test = (
+            self.processed_data["X_test_scaled"]
+            if self.model_type == ModelType.NN
+            else self.processed_data["X_test_raw"]
+        )
 
-        if len(X_test_data) == 0:
-            print("WARNING: Test data is empty. skipping evaluation")
+        if len(x_test) == 0:
+            logger.warning("Test data is empty; skipping evaluation.")
             return
-        for sample_idx in range(len(X_test_data)):
-            run_id = self.test_run_id_map.get(sample_idx, str(sample_idx))
 
-            x_sample = X_test_data[[sample_idx]]
+        global_metrics: Dict[str, Dict[str, list]] = {
+            qoi: {"rmse": [], "r2": [], "rmse_ref": [], "r2_ref": []}
+            for qoi in self.qoi_names
+        }
+        has_ref = bool(self.reference_qois)
+
+        for idx in range(len(x_test)):
+            run_id = self.test_run_id_map.get(idx, str(idx))
+            x_sample = x_test[[idx]]
+
             for qoi_name in self.qoi_names:
                 if qoi_name not in self.trained_models_per_qoi:
                     continue
+
                 model = self.trained_models_per_qoi[qoi_name]
                 compressor = self.compressors_per_qoi[qoi_name]
 
-                y_true = self.processed_data["y_test_per_qoi"][qoi_name][sample_idx]
+                y_true = self.processed_data["y_test_per_qoi"][qoi_name][idx]
                 z_pred = model.predict_values(x_sample)
-                
-                y_pred_reconstructed = compressor.inverse_transform(z_pred)
+                y_pred = compressor.inverse_transform(z_pred)
+
                 y_true_flat = y_true.flatten()
-                y_pred_flat = y_pred_reconstructed.flatten()
+                y_pred_flat = y_pred.flatten()
 
                 mask = np.isfinite(y_true_flat) & np.isfinite(y_pred_flat)
-
                 y_true_clean = y_true_flat[mask]
                 y_pred_clean = y_pred_flat[mask]
-                y_pred_ref = None
 
-                if has_reference:
-                    run_data = self.reference_qois.get(str(run_id), {})
-                    y_pred_ref_raw = run_data.get(qoi_name)
-                    
-                    if y_pred_ref_raw is not None:
-                        y_pred_ref = np.array(y_pred_ref_raw).flatten()
+                y_pred_ref: Optional[np.ndarray] = None
+                if has_ref:
+                    ref_data = self.reference_qois.get(str(run_id), {})
+                    ref_raw = ref_data.get(qoi_name)
+                    if ref_raw is not None:
+                        y_pred_ref = np.array(ref_raw).flatten()
                         min_len = min(len(y_true_flat), len(y_pred_ref))
                         y_pred_ref = y_pred_ref[:min_len]
 
                 if len(y_true_clean) == 0:
-                    print(f"[ALERTA] Run {run_id} | {qoi_name}: Todos os dados são NaN/Inf.")
+                    logger.warning("Run %s | %s: all values are NaN/Inf.", run_id, qoi_name)
                     continue
 
                 try:
-                    rmse = calculate_rmse(y_true_clean,y_pred_clean)
-                    if np.var(y_true_clean) < 1e-9:
-                        r2 = 1.0 if rmse < 1e-5 else 0.0
-                    else:
-                        r2 = calculate_r2(y_true_clean, y_pred_clean)
-                    global_metrics[qoi_name]['rmse'].append(rmse)
-                    global_metrics[qoi_name]['r2'].append(r2)
-
-                except Exception as e:
-                    print(f"Erro ao calcular métrica para {run_id}: {e}")
+                    rmse = calculate_rmse(y_true_clean, y_pred_clean)
+                    r2 = (
+                        1.0 if rmse < 1e-5 else 0.0
+                    ) if np.var(y_true_clean) < 1e-9 else calculate_r2(y_true_clean, y_pred_clean)
+                    global_metrics[qoi_name]["rmse"].append(rmse)
+                    global_metrics[qoi_name]["r2"].append(r2)
+                except Exception:
+                    logger.exception("Metric computation failed for run %s.", run_id)
 
                 if y_pred_ref is not None:
-                    y_true_ref_slice = y_true_flat[:len(y_pred_ref)]
-                    mask_ref = np.isfinite(y_true_ref_slice) & np.isfinite(y_pred_ref)
+                    y_true_ref = y_true_flat[: len(y_pred_ref)]
+                    mask_ref = np.isfinite(y_true_ref) & np.isfinite(y_pred_ref)
                     if np.any(mask_ref):
-                        rmse_ref = calculate_rmse(y_true_ref_slice[mask_ref], y_pred_ref[mask_ref])
-                        r2_ref = calculate_r2(y_true_ref_slice[mask_ref], y_pred_ref[mask_ref])
-                        global_metrics[qoi_name]['rmse_ref'].append(rmse_ref)
-                        global_metrics[qoi_name]['r2_ref'].append(r2_ref)
+                        global_metrics[qoi_name]["rmse_ref"].append(
+                            calculate_rmse(y_true_ref[mask_ref], y_pred_ref[mask_ref])
+                        )
+                        global_metrics[qoi_name]["r2_ref"].append(
+                            calculate_r2(y_true_ref[mask_ref], y_pred_ref[mask_ref])
+                        )
 
                 plot_comparison_timeseries(
                     y_true=y_true_flat,
                     y_pred_new=y_pred_flat,
                     y_pred_old=y_pred_ref,
-                    run_number=sample_idx,
+                    run_number=idx,
                     qoi_name=f"{qoi_name} (Run ID: {run_id})",
                     save_path_prefix=plot_prefix,
-                    new_model_label=f"Previsão {self.model_type.value}"
+                    new_model_label=f"{self.model_type.value} Prediction",
                 )
-        print("\n" + "="*60)
-        print(f"{'QoI NAME':<30} | {'RMSE Médio (std)':<20} | {'R² Médio (std)':<20} | {'Ref R²'}")
-        print("-" * 60)
-        for qoi_name, metrics in global_metrics.items():
-            rmse_avg = np.mean(metrics['rmse'])
-            rmse_std = np.std(metrics['rmse'])
 
-            r2_avg = np.mean(metrics['r2'])
-            r2_std = np.std(metrics['r2'])
+        self._log_evaluation_summary(global_metrics)
 
-            if metrics['r2_ref']:
-                r2_r = np.mean(metrics['r2_ref'])
-                ref_str = f"{r2_r:.4f}"
-            else:
-                ref_str = "N/A"
+    @staticmethod
+    def _log_evaluation_summary(global_metrics: Dict[str, Dict[str, list]]) -> None:
+        header = f"{'QoI':<40} | {'RMSE mean (std)':<20} | {'R² mean (std)':<20} | Ref R²"
+        logger.info("\n%s\n%s", header, "-" * len(header))
+        for qoi_name, m in global_metrics.items():
+            rmse_str = f"{np.mean(m['rmse']):.4f} (+/-{np.std(m['rmse']):.4f})" if m["rmse"] else "N/A"
+            r2_str = f"{np.mean(m['r2']):.4f} (+/-{np.std(m['r2']):.4f})" if m["r2"] else "N/A"
+            ref_str = f"{np.mean(m['r2_ref']):.4f}" if m["r2_ref"] else "N/A"
+            logger.info("%s | %s | %s | %s", qoi_name.ljust(40), rmse_str.ljust(20), r2_str.ljust(20), ref_str)
 
-            print(f"{qoi_name:<40} | {rmse_avg:.4f} (+-{rmse_std:.4f}) | {r2_avg:.4f} (+-{r2_std:.4f}) | reference: {ref_str}")
-        
-        print("="*80 + "\n")
+    # ------------------------------------------------------------------
+    # Prediction
+    # ------------------------------------------------------------------
 
     def _preprocess_input_features(self, features_df: pd.DataFrame) -> np.ndarray:
-        """
-        Converte um DataFrame de features brutas em um array numpy,
-        usando os metadados e a ordem das features aprendidos durante o treino.
-        (Lógica adaptada de _build_feature_array em processor.py)
-        """
+        """Encode a raw features DataFrame using the learned metadata and ordering."""
         try:
             features_df_ordered = features_df[self.feature_names]
-        except KeyError:
-            raise ValueError(f"O DataFrame de entrada não possui todas as colunas necessárias. Esperado: {self.feature_names}")
-    
-        categorical_col = list(self.metadata.keys())
-        processed_rows = []
+        except KeyError as exc:
+            raise ValueError(
+                f"Input DataFrame is missing required columns. Expected: {self.feature_names}"
+            ) from exc
+
+        categorical_cols = list(self.metadata.keys())
+        rows: list[list[float]] = []
 
         for row in features_df_ordered.itertuples(index=False):
-            new_row_values = []
+            values: list[float] = []
             for i, value in enumerate(row):
                 col_name = self.feature_names[i]
-
-                if col_name in categorical_col:
+                if col_name in categorical_cols:
                     try:
-                        valid_values = self.metadata[col_name]
-                        idx = valid_values.index(value)
-                        new_row_values.append(float(idx))
+                        values.append(float(self.metadata[col_name].index(value)))
                     except ValueError:
-                        print(f"AVISO: Valor '{value}' não encontrado no metadata de '{col_name}'. Usando -1.0")
-                        new_row_values.append(-1.0)
+                        logger.warning(
+                            "Unknown categorical value '%s' for '%s'; encoding as -1.",
+                            value,
+                            col_name,
+                        )
+                        values.append(-1.0)
                 else:
-                    new_row_values.append(float(value))
+                    values.append(float(value))
+            rows.append(values)
 
-            processed_rows.append(new_row_values)
+        return np.array(rows)
 
-        return np.array(processed_rows)
-    
-    def predict(self, X_new: pd.DataFrame):
-        """
-        Faz uma nova predição baseada nos dados de entrada.
+    def predict(self, x_new: pd.DataFrame) -> Dict[str, np.ndarray]:
+        """Generate predictions for new input samples.
 
         Args:
-            X_new (pd.Dataframe): Um df com novas amostras de entrada.
-                                  As colunas devem corresponder aos dados de treino.
+            x_new: DataFrame whose columns match the training features.
+
         Returns:
-            Dict[str, np.ndarray]: Um dict onde cada chave é um qoi_name e cada valor
-                                   é um np.ndarray (n_samples, n_timesteps) com as
-                                   predições des-escaladas (valores reais).
+            ``{qoi_name: np.ndarray}`` with shape ``(n_samples, n_timesteps)``.
         """
-        print("\n --- fazendo a predição ---")
-
         if not self.trained_models_per_qoi:
-            raise RuntimeError("Nenhum modelo treinado. Chame .train() ou .load_model()")
+            raise RuntimeError("No trained models. Call .train() or .load_model() first.")
         if self.x_scaler is None or not self.y_scalers:
-            raise RuntimeError("Scalers não foram ecnontrados.")
-        
-        X_raw_numpy = self._preprocess_input_features(X_new)
+            raise RuntimeError("Scalers not found; the factory is not fully trained.")
 
-        if self.model_type == ModelType.NN:
-            X_input = self.x_scaler.transform(X_raw_numpy)
-        else:
-            X_input = X_raw_numpy
+        x_raw = self._preprocess_input_features(x_new)
+        x_input = self.x_scaler.transform(x_raw) if self.model_type == ModelType.NN else x_raw
 
-        predictions_physical = {}
-
+        predictions: Dict[str, np.ndarray] = {}
         for qoi_name, model in self.trained_models_per_qoi.items():
-
-            Z_pred = model.predict_values(X_input)
-            if qoi_name not in self.compressors_per_qoi:
-                print(f"AVISO: Compressor para {qoi_name} não encontrado.")
+            z_pred = model.predict_values(x_input)
+            compressor = self.compressors_per_qoi.get(qoi_name)
+            if compressor is None:
+                logger.warning("No compressor found for QoI '%s'; skipping.", qoi_name)
                 continue
-            compressor = self.compressors_per_qoi[qoi_name]
-            Y_pred_reconstructed = compressor.inverse_transform(Z_pred)
+            predictions[qoi_name] = compressor.inverse_transform(z_pred)
 
-            predictions_physical[qoi_name] = Y_pred_reconstructed
-        print("--- predição completa ---")
-        return predictions_physical
-    
-    def save_model(self, file_path: str | Path):
-        """
-        Salva a fábrica treinada (com scalers e tals).
-        """
+        logger.info("Prediction complete for %d QoI(s).", len(predictions))
+        return predictions
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+
+    def save_model(self, file_path: Union[str, Path]) -> None:
+        """Serialise the trained factory to disk via pickle."""
         file_path = Path(file_path)
-        print(f"\nSalvando modelo em {file_path}")
-
         file_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(file_path ,'wb') as f:
-            pickle.dump(self, f)
+        with open(file_path, "wb") as fh:
+            pickle.dump(self, fh)
+        logger.info("Model saved to %s.", file_path)
 
     @classmethod
-    def load_model(cls, file_path: str | Path):
-        """
-        Carrega uma fábrica salva pelo save_model
+    def load_model(cls, file_path: Union[str, Path]) -> "SurrogateFactory":
+        """Deserialise a previously saved factory.
+
+        Raises:
+            FileNotFoundError: If the file does not exist.
+            TypeError: If the loaded object is not a ``SurrogateFactory``.
         """
         file_path = Path(file_path)
-        print(f"Carregando modelo de {file_path}")
-
         if not file_path.exists():
-            raise FileNotFoundError(f"Arquivo de modelo não encontrado: {file_path}")
-        with open(file_path,'rb') as f:
-            loaded_object = pickle.load(f)
-        if not isinstance(loaded_object, cls):
-            raise TypeError(f"O arquivo carregado não é uma instância de {cls.__name__}")
-        
-        print(f"Modelo carregado com sucesso. Tupo: {loaded_object.model_type.value}")
-        return loaded_object
+            raise FileNotFoundError(f"Model file not found: {file_path}")
+        with open(file_path, "rb") as fh:
+            obj = pickle.load(fh)  # noqa: S301
+        if not isinstance(obj, cls):
+            raise TypeError(f"Loaded object is not an instance of {cls.__name__}.")
+        logger.info("Model loaded from %s (type: %s).", file_path, obj.model_type.value)
+        return obj

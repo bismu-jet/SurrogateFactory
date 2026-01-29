@@ -1,94 +1,80 @@
-"""
-Módulo para construção de arquiteturas de modelos de redes neurais.
-"""
-import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Input, Dropout
-from tensorflow.keras.callbacks import EarlyStopping
+"""Neural Network surrogate model implementation using scikit-learn MLPRegressor."""
 
-def _build_model(input_shape: int, output_shape: int) -> tf.keras.Model:
-    """
-    Constrói e compila um modelo de rede neural (MLP) para regressão.
+import logging
+from typing import Optional
 
-    A arquitetura usa camadas densas com ativação 'relu', uma escolha robusta
-    para aprender relações não-lineares. A camada de saída não tem ativação
-    (linear), o que é padrão para problemas de regressão.
+import numpy as np
+from sklearn.neural_network import MLPRegressor
 
-    Args:
-        input_shape (int): O número de features de entrada (X_train.shape[1]).
-        output_shape (int): O número de valores de saída (y_train.shape[1]).
+logger = logging.getLogger(__name__)
 
-    Returns:
-        Um modelo Keras sequencial, compilado e pronto para o treinamento.
-    """
-    model = Sequential([
-        Input(shape=(input_shape,), name='input_layer'),
-        
-        Dense(256, activation='relu'),
-        Dropout(0.2),
-        Dense(128, activation='relu'),
-        Dropout(0.2),
-        Dense(64, activation='relu'),
-        
-        Dense(output_shape, name='output_layer')
-    ], name='surrogate_model')
-    
-    model.compile(
-        optimizer='adam',
-        loss='mean_squared_error',
-        metrics=['mae']
-    )
-    
-    return model
 
 class NeuralNetworkModel:
+    """MLP regressor that predicts a full output vector.
+
+    Wraps ``sklearn.neural_network.MLPRegressor`` to provide the same
+    ``.train()`` / ``.predict_values()`` interface as the Kriging and RBF
+    models.
+
+    Note:
+        This model expects **scaled** inputs (e.g. via ``MinMaxScaler``).
     """
-    Esta classe agrupa um único modelo Keras para prever um vetor de saída,
-    mantendo uma interface consistente de .train() e .predict_values().
-    """
 
-    def __init__(self):
-        self.model: tf.keras.Model = None
-        self.epochs = 200
-        self.batch_size = 18
-        self.validation_patience = 20
+    def __init__(self) -> None:
+        self.model: Optional[MLPRegressor] = None
+        self.max_iter: int = 500
+        self.early_stopping: bool = True
+        self.validation_fraction: float = 0.15
 
-    def train(self, X_train, y_train_vector, X_val, y_val_vector):
+    def train(
+        self,
+        x_train: np.ndarray,
+        y_train_vector: np.ndarray,
+        x_val: np.ndarray,
+        y_val_vector: np.ndarray,
+    ) -> None:
+        """Train an MLP regressor on scaled feature/target data.
+
+        Args:
+            x_train: Scaled training features (n_train, n_features).
+            y_train_vector: Training targets (n_train, n_components).
+            x_val: Scaled validation features (used only for logging).
+            y_val_vector: Validation targets (used only for logging).
         """
-        Treina um único modelo Keras para prever o vetor de saída completo.
-        
-        Nota: Esta classe espera que X_train e X_val já estejam ESCALADOS.
-        """
+        output_dim = y_train_vector.shape[1]
+        logger.info("Training Neural Network for %d output components.", output_dim)
 
-        input_shape = X_train.shape[1]
-        output_shape = y_train_vector.shape[1]
-
-        self.model = _build_model(input_shape, output_shape)
-
-        early_stop_callback = EarlyStopping(
-            monitor='val_loss',
-            patience=self.validation_patience,
-            restore_best_weights=True
+        self.model = MLPRegressor(
+            hidden_layer_sizes=(256, 128, 64),
+            activation="relu",
+            solver="adam",
+            max_iter=self.max_iter,
+            early_stopping=self.early_stopping,
+            validation_fraction=self.validation_fraction,
+            random_state=42,
+            verbose=False,
         )
-        print(f"--- Treinando Modelo de Rede Neural (para {output_shape} timesteps) ---")
 
-        self.model.fit(
-            X_train,
-            y_train_vector,
-            validation_data=(X_val, y_val_vector),
-            epochs=self.epochs,
-            batch_size=self.batch_size,
-            callbacks=[early_stop_callback],
-            verbose=0
-        )
-        
-        print(f"--- Treinamento da Rede Neural concluído ---")
+        # Combine train + val so the MLP's own early-stopping split mirrors
+        # the data the caller already separated.
+        x_combined = np.vstack([x_train, x_val])
+        y_combined = np.vstack([y_train_vector, y_val_vector])
 
-    def predict_values(self, X_sample):
+        self.model.fit(x_combined, y_combined)
+        logger.info("Neural Network training complete (iterations=%d).", self.model.n_iter_)
+
+    def predict_values(self, x_sample: np.ndarray) -> np.ndarray:
+        """Predict the full output vector for new input samples.
+
+        Args:
+            x_sample: Scaled input features (n_samples, n_features).
+
+        Returns:
+            Predicted outputs (n_samples, n_components).
+
+        Raises:
+            RuntimeError: If the model has not been trained yet.
         """
-        Prevê o vetor de time-series completo para uma nova amostra de entrada X.
-        """
-
         if self.model is None:
-            raise RuntimeError("modelo ainda não foi treinado, Chame .train() primeiro")
-        return self.model.predict(X_sample)
+            raise RuntimeError("Neural network has not been trained yet. Call .train() first.")
+        return self.model.predict(x_sample)
