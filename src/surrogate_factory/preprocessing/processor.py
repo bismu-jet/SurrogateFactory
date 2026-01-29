@@ -1,279 +1,278 @@
-"""
-Módulo de pré-processamento de dados para a arquitetura multi-modelo.
-"""
+"""Data preprocessing: feature encoding, scaling, PCA compression, and QoI restructuring."""
+
+import logging
+from typing import Any, Dict, List, Set, Tuple, Union
 
 import numpy as np
 import pandas as pd
-from typing import Dict, List, Any, Tuple, Set
-from sklearn.preprocessing import MinMaxScaler
 from sklearn.decomposition import PCA
-import joblib
-from pathlib import Path
+from sklearn.preprocessing import MinMaxScaler
 
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Feature array construction
+# ---------------------------------------------------------------------------
 
 def _build_feature_array(
-    features_df: pd.DataFrame, 
-    metadata: Dict[str, List[str]]
+    features_df: pd.DataFrame,
+    metadata: Dict[str, List[str]],
 ) -> Tuple[np.ndarray, List[str]]:
+    """Convert a features DataFrame into a numeric numpy array.
+
+    Categorical columns (listed in *metadata*) are ordinal-encoded using the
+    index within their valid-values list.  All other columns are cast to float.
+
+    Returns:
+        ``(X_array, ordered_feature_names)``
     """
-    Converte o DataFrame de features em um array numérico,
-    imitando a lógica de '_GetPointsFromRun' do Project 2.
-    """
-    
     categorical_cols = list(metadata.keys())
-    
-    # Pega todas as colunas que não são 'run_number'
-    cols_to_ignore = ['run_id', 'run_number']
-    all_feature_names = [col for col in features_df.columns if col not in cols_to_ignore]
-    
-    # Garante uma ordem consistente: categóricas primeiro, depois numéricas
-    ordered_feature_names = [col for col in all_feature_names if col in categorical_cols]
-    numeric_cols = [col for col in all_feature_names if col not in categorical_cols]
-    ordered_feature_names.extend(numeric_cols)
+    cols_to_ignore = {"run_id", "run_number"}
+    all_feature_names = [c for c in features_df.columns if c not in cols_to_ignore]
 
-    processed_rows = []
-    
-    # itertuples é mais rápido que iterrows
-    for row in features_df[ordered_feature_names].itertuples(index=False):
-        new_row_values = []
+    # Consistent ordering: categorical columns first, then numeric.
+    ordered = [c for c in all_feature_names if c in categorical_cols]
+    ordered.extend(c for c in all_feature_names if c not in categorical_cols)
+
+    rows: list[list[float]] = []
+    for row in features_df[ordered].itertuples(index=False):
+        values: list[float] = []
         for i, value in enumerate(row):
-            col_name = ordered_feature_names[i]
-            
+            col_name = ordered[i]
             if col_name in categorical_cols:
-                # Lógica do Project 2: converter valor categórico em seu índice
                 try:
-                    valid_values = metadata[col_name]
-                    idx = valid_values.index(value)
-                    new_row_values.append(float(idx))
+                    values.append(float(metadata[col_name].index(value)))
                 except ValueError:
-                    print(f"AVISO: Valor '{value}' não encontrado no metadata de '{col_name}'. Usando -1.0")
-                    new_row_values.append(-1.0)
+                    logger.warning(
+                        "Value '%s' not found in metadata for '%s'; encoding as -1.",
+                        value,
+                        col_name,
+                    )
+                    values.append(-1.0)
             else:
-                # Lógica do Project 2: apenas converte para float
-                new_row_values.append(float(value))
-        
-        processed_rows.append(new_row_values)
-        
-    # Retorna os dados crus (raw)
-    return np.array(processed_rows), ordered_feature_names
+                values.append(float(value))
+        rows.append(values)
 
+    return np.array(rows), ordered
+
+
+# ---------------------------------------------------------------------------
+# QoI restructuring
+# ---------------------------------------------------------------------------
 
 def _restructure_qois(
-    qois_per_run: Dict[int, Dict[str, List[float]]],
-    run_ids: List[int]
+    qois_per_run: Dict[Any, Dict[str, List[float]]],
+    run_ids: List[Any],
 ) -> Tuple[Dict[str, np.ndarray], List[str]]:
-    """
-    Transforma o dicionário de QoIs de [run][qoi] para [qoi][runs].
-    """
+    """Pivot QoI data from ``{run: {qoi: vector}}`` to ``{qoi: (n_runs, n_timesteps)}``."""
     if not qois_per_run:
         return {}, []
 
-    # 1. Encontrar o super-conjunto de todos os nomes de QoIs
     all_qoi_names_set: Set[str] = set()
     for qoi_dict in qois_per_run.values():
         all_qoi_names_set.update(qoi_dict.keys())
-    
-    all_qoi_names = sorted(list(all_qoi_names_set))
-    
-    # 2. Inicializar o dicionário de saída
-    y_per_qoi: Dict[str, List[np.ndarray]] = {qoi_name: [] for qoi_name in all_qoi_names}
-    
-    # 3. Rastrear QoIs que se mostrarem inválidos
-    valid_qoi_names_final = set(all_qoi_names)
 
-    # 4. Coletar os dados
+    all_qoi_names = sorted(all_qoi_names_set)
+    y_per_qoi: Dict[str, list[np.ndarray]] = {q: [] for q in all_qoi_names}
+    valid_qoi_names = set(all_qoi_names)
+
     for run_id in run_ids:
-        run_id_str = str(run_id)
-        if run_id_str not in qois_per_run:
-            if isinstance(run_id,int) and run_id in qois_per_run:
-                run_id_str = run_id
+        run_id_key: Any = str(run_id)
+        if run_id_key not in qois_per_run:
+            if isinstance(run_id, int) and run_id in qois_per_run:
+                run_id_key = run_id
             else:
                 continue
-            
-        run_qoi_data = qois_per_run[run_id_str]
-        
-        for qoi_name in all_qoi_names:
-            if qoi_name not in valid_qoi_names_final:
-                continue # Pula QoI já invalidado
-                
-            qoi_vector = run_qoi_data.get(qoi_name)
-            
-            if qoi_vector is not None:
-                # Adiciona o vetor de dados
-                y_per_qoi[qoi_name].append(np.array(qoi_vector))
-            elif qoi_name in valid_qoi_names_final:
-                # Se um run não tem um QoI, esse QoI é inválido para todos
-                print(f"AVISO: QoI '{qoi_name}' não encontrado no Run #{run_id}. Excluindo este QoI do dataset.")
-                valid_qoi_names_final.remove(qoi_name)
-                del y_per_qoi[qoi_name] # Remove dos dados de saída
 
-    # 5. Converter listas para arrays numpy 2D e filtrar inconsistências
-    final_y_per_qoi: Dict[str, np.ndarray] = {}
-    for qoi_name in valid_qoi_names_final:
+        run_data = qois_per_run[run_id_key]
+        for qoi_name in list(valid_qoi_names):
+            vec = run_data.get(qoi_name)
+            if vec is not None:
+                y_per_qoi[qoi_name].append(np.array(vec))
+            else:
+                logger.warning(
+                    "QoI '%s' missing from run #%s; excluding this QoI.",
+                    qoi_name,
+                    run_id,
+                )
+                valid_qoi_names.discard(qoi_name)
+                y_per_qoi.pop(qoi_name, None)
+
+    final: Dict[str, np.ndarray] = {}
+    for qoi_name in valid_qoi_names:
         data_list = y_per_qoi[qoi_name]
         if data_list:
-             try:
-                # Tenta empilhar os arrays. Falhará se tiverem tamanhos diferentes.
-                stacked_array = np.array(data_list)
-                if stacked_array.ndim == 1: # numpy cria array 1D se os tamanhos forem inconsistentes
-                     raise ValueError("Tamanhos de vetor inconsistentes.")
-                final_y_per_qoi[qoi_name] = stacked_array
-             except ValueError:
-                 print(f"AVISO: QoI '{qoi_name}' tem vetores de tamanhos inconsistentes entre runs. Excluindo.")
-            
-    final_qoi_names = sorted(list(final_y_per_qoi.keys()))
-            
-    return final_y_per_qoi, final_qoi_names
+            try:
+                stacked = np.array(data_list)
+                if stacked.ndim == 1:
+                    raise ValueError("Inconsistent vector lengths.")
+                final[qoi_name] = stacked
+            except ValueError:
+                logger.warning(
+                    "QoI '%s' has inconsistent vector lengths across runs; excluding.",
+                    qoi_name,
+                )
+
+    return final, sorted(final.keys())
+
 
 def _get_id_list(df: pd.DataFrame) -> List[Any]:
-    if 'run_id' in df.columns:
-        return df['run_id'].tolist()
-    elif 'run_number' in df.columns:
-        return df['run_number'].tolist()
-    else:
-        return[]
+    """Extract the run identifier column as a list."""
+    if "run_id" in df.columns:
+        return df["run_id"].tolist()
+    if "run_number" in df.columns:
+        return df["run_number"].tolist()
+    return []
 
+
+# ---------------------------------------------------------------------------
+# Main preprocessing pipeline
+# ---------------------------------------------------------------------------
 
 def process_data_multi_model(
     df_train_features: pd.DataFrame,
-    qois_train: Dict[int, Dict[str, List[float]]],
+    qois_train: Dict[Any, Dict[str, List[float]]],
     df_val_features: pd.DataFrame,
-    qois_val:Dict[int, Dict[str, List[float]]],
+    qois_val: Dict[Any, Dict[str, List[float]]],
     df_test_features: pd.DataFrame,
-    qois_test: Dict[int, Dict[str, List[float]]],
-    metadata: Dict[str, List[str]]
+    qois_test: Dict[Any, Dict[str, List[float]]],
+    metadata: Dict[str, List[str]],
 ) -> Dict[str, Any]:
-    """
-    Função principal de pré-processamento para o fluxo multi-modelo.
-    O SCALER FOI REMOVIDO para ser compatível com o RBF.
-    """
-    
-    # --- 1. Processar Features (X) ---
-    print("Processando features de treino (X_train)...")
-    X_train_raw, feature_names = _build_feature_array(df_train_features, metadata)
+    """Run the full preprocessing pipeline for the multi-model factory.
 
-    print("Processando features de validação (X_val)...")
-    X_val_raw, _ = _build_feature_array(df_val_features[df_train_features.columns], metadata)
-    
-    print("Processando features de teste (X_test)...")
-    # Garante que o df_test tenha as colunas na mesma ordem
-    X_test_raw, _ = _build_feature_array(df_test_features[df_train_features.columns], metadata)
+    Steps:
+        1. Encode and build feature arrays (X).
+        2. Fit a ``MinMaxScaler`` on training features.
+        3. Restructure QoI targets from per-run to per-QoI layout.
+        4. Ensure train / val / test share the same QoI set.
+        5. Fit per-QoI ``MinMaxScaler`` on training targets.
 
-    # --- 2. Escalonar Features (X) ---
+    Returns:
+        Dictionary containing raw and scaled feature arrays, per-QoI target
+        arrays, fitted scalers, QoI names, and feature names.
+    """
+    # 1. Features (X) ----------------------------------------------------------
+    logger.info("Building feature arrays.")
+    x_train_raw, feature_names = _build_feature_array(df_train_features, metadata)
+    x_val_raw, _ = _build_feature_array(df_val_features[df_train_features.columns], metadata)
+    x_test_raw, _ = _build_feature_array(df_test_features[df_train_features.columns], metadata)
+
+    # 2. Scale features --------------------------------------------------------
     x_scaler = MinMaxScaler()
-    X_train_scaled = x_scaler.fit_transform(X_train_raw)
-    X_val_scaled = x_scaler.transform(X_val_raw)
-    X_test_scaled = x_scaler.transform(X_test_raw)
-    
-    print(f"Processamento de X concluído. Shape X_train: {X_train_raw.shape}")
-    if X_train_raw.shape[0] > 0:
-        print(f"Exemplo de dados X_train (primeira linha, crus): {X_train_raw[0]}")
-        print(f"Exemplo de dados X_train (primeira linha, escalada): {X_train_scaled[0]}")
+    x_train_scaled = x_scaler.fit_transform(x_train_raw)
+    x_val_scaled = x_scaler.transform(x_val_raw)
+    x_test_scaled = x_scaler.transform(x_test_raw)
 
+    logger.info("Feature processing complete. X_train shape: %s", x_train_raw.shape)
 
-    # --- 3. Processar Targets (Y) ---
-    print("Reestruturando dados de target (Y) por QoI...")
-    
-    train_run_ids = _get_id_list(df_train_features)
-    val_run_ids = _get_id_list(df_val_features)
-    test_run_ids = _get_id_list(df_test_features)
+    # 3. Targets (Y) -----------------------------------------------------------
+    logger.info("Restructuring target data by QoI.")
+    y_train_per_qoi, train_qoi_names = _restructure_qois(qois_train, _get_id_list(df_train_features))
+    y_val_per_qoi, val_qoi_names = _restructure_qois(qois_val, _get_id_list(df_val_features))
+    y_test_per_qoi, test_qoi_names = _restructure_qois(qois_test, _get_id_list(df_test_features))
 
-    y_train_per_qoi, train_qoi_names = _restructure_qois(qois_train, train_run_ids)
-    y_val_per_qoi, val_qoi_names = _restructure_qois(qois_val, val_run_ids)
-    y_test_per_qoi, test_qoi_names = _restructure_qois(qois_test, test_run_ids)
+    # 4. Intersect QoI names ---------------------------------------------------
+    valid_qoi_names = sorted(set(train_qoi_names) & set(val_qoi_names) & set(test_qoi_names))
 
-    # --- 4. Garantir Consistência de QoIs ---
-    # Garante que ambos os conjuntos (treino e teste) tenham os mesmos QoIs
-    valid_qoi_names = sorted(list(set(train_qoi_names) & set(test_qoi_names) & set(val_qoi_names)))
-    
-    final_y_train = {qoi: y_train_per_qoi[qoi] for qoi in valid_qoi_names if qoi in y_train_per_qoi}
-    final_y_val = {qoi: y_val_per_qoi[qoi] for qoi in valid_qoi_names if qoi in y_val_per_qoi}
-    final_y_test = {qoi: y_test_per_qoi[qoi] for qoi in valid_qoi_names if qoi in y_test_per_qoi}
-    
-    # Filtra novamente caso o restructure tenha removido algo
-    final_valid_qoi_names = sorted(list(final_y_train.keys()))
+    final_y_train = {q: y_train_per_qoi[q] for q in valid_qoi_names if q in y_train_per_qoi}
+    final_y_val = {q: y_val_per_qoi[q] for q in valid_qoi_names if q in y_val_per_qoi}
+    final_y_test = {q: y_test_per_qoi[q] for q in valid_qoi_names if q in y_test_per_qoi}
 
-    y_scalers = {}
-    final_y_train_scaled = {}
-    final_y_val_scaled = {}
-    final_y_test_scaled = {}
+    final_valid_qoi_names = sorted(final_y_train.keys())
+
+    # 5. Scale targets per QoI -------------------------------------------------
+    y_scalers: Dict[str, MinMaxScaler] = {}
+    y_train_scaled: Dict[str, np.ndarray] = {}
+    y_val_scaled: Dict[str, np.ndarray] = {}
+    y_test_scaled: Dict[str, np.ndarray] = {}
 
     for qoi in final_valid_qoi_names:
-        y_scaler = MinMaxScaler()
-        y_train_flat = final_y_train[qoi].flatten().reshape(-1,1)
-        y_scaler.fit(y_train_flat)
-        y_scalers[qoi] = y_scaler
+        scaler = MinMaxScaler()
+        flat = final_y_train[qoi].flatten().reshape(-1, 1)
+        scaler.fit(flat)
+        y_scalers[qoi] = scaler
 
-        final_y_train_scaled[qoi] = y_scaler.transform(y_train_flat).reshape(final_y_train[qoi].shape)
+        y_train_scaled[qoi] = scaler.transform(flat).reshape(final_y_train[qoi].shape)
+        y_val_scaled[qoi] = scaler.transform(
+            final_y_val[qoi].flatten().reshape(-1, 1)
+        ).reshape(final_y_val[qoi].shape)
+        y_test_scaled[qoi] = scaler.transform(
+            final_y_test[qoi].flatten().reshape(-1, 1)
+        ).reshape(final_y_test[qoi].shape)
 
-        y_val_flat = final_y_val[qoi].flatten().reshape(-1, 1)
-        final_y_val_scaled[qoi] = y_scaler.transform(y_val_flat).reshape(final_y_val[qoi].shape)
-
-        y_test_flat = final_y_test[qoi].flatten().reshape(-1, 1)
-        final_y_test_scaled[qoi] = y_scaler.transform(y_test_flat).reshape(final_y_test[qoi].shape)
-    
-    print(f"Processamento concluído. Encontrados {len(final_valid_qoi_names)} QoIs consistentes.")
+    logger.info("Preprocessing complete. %d consistent QoI(s) found.", len(final_valid_qoi_names))
 
     return {
-        # --- Features (X) ---
-        "X_train_raw": X_train_raw,         # Dados crus
-        "X_val_raw": X_val_raw,
-        "X_test_raw": X_test_raw,
-        "X_train_scaled": X_train_scaled,   # Dados escalados [0, 1]
-        "X_val_scaled": X_val_scaled,
-        "X_test_scaled": X_test_scaled,
-        "x_scaler": x_scaler,               # O scaler de features (fitado)
-        
-        # --- Targets (Y) ---
-        "y_train_per_qoi": final_y_train_scaled,
-        "y_val_per_qoi": final_y_val_scaled,
-        "y_test_per_qoi": final_y_test_scaled,
-        "y_scalers": y_scalers,             # Dicionário de scalers de targets
-        
-        # --- Metadados ---
+        # Features
+        "X_train_raw": x_train_raw,
+        "X_val_raw": x_val_raw,
+        "X_test_raw": x_test_raw,
+        "X_train_scaled": x_train_scaled,
+        "X_val_scaled": x_val_scaled,
+        "X_test_scaled": x_test_scaled,
+        "x_scaler": x_scaler,
+        # Targets
+        "y_train_per_qoi": y_train_scaled,
+        "y_val_per_qoi": y_val_scaled,
+        "y_test_per_qoi": y_test_scaled,
+        "y_scalers": y_scalers,
+        # Metadata
         "qoi_names": final_valid_qoi_names,
-        "feature_names": feature_names
+        "feature_names": feature_names,
     }
 
+
+# ---------------------------------------------------------------------------
+# PCA output compressor
+# ---------------------------------------------------------------------------
+
 class OutputCompressor:
-    def __init__(self, n_components=0.99):
-        """
-        n_components: Se float (ex: 0.99), mantém 99% da variância.
-                      Se int (ex: 3), mantém exatamente 3 componentes.
-        """
-        self.model = PCA(n_components=n_components)
-        self.is_fitted = False
+    """Reduce high-dimensional time-series output via PCA.
 
-    def fit_transform(self, Y_raw):
+    Args:
+        n_components: If a float in (0, 1), the fraction of variance to
+            retain.  If an integer, the exact number of components.
+    """
+
+    def __init__(self, n_components: Union[float, int] = 0.99) -> None:
+        self._pca = PCA(n_components=n_components)
+        self.is_fitted: bool = False
+
+    @property
+    def n_components_(self) -> int:
+        """Number of components retained after fitting."""
+        return int(self._pca.n_components_)
+
+    def fit_transform(self, y_raw: np.ndarray) -> np.ndarray:
+        """Fit PCA on *y_raw* and return the latent representation.
+
+        Args:
+            y_raw: Matrix of shape ``(n_samples, n_timesteps)``.
+
+        Returns:
+            Latent matrix ``(n_samples, n_components)``.
         """
-        Y_raw: Matriz (n_samples, n_timesteps) - Ex: (50, 100)
-        Retorna: Z_latente (n_samples, n_components) - Ex: (50, 3)
-        """
-        print(f"Treinando PCA na saída de shape {Y_raw.shape}...")
-        Z = self.model.fit_transform(Y_raw)
+        logger.info("Fitting PCA on output of shape %s.", y_raw.shape)
+        z = self._pca.fit_transform(y_raw)
         self.is_fitted = True
-        
-        explained_var = np.sum(self.model.explained_variance_ratio_)
-        print(f"PCA reduziu para {self.model.n_components_} componentes.")
-        print(f"Variância explicada acumulada: {explained_var:.4f}")
-        
-        return Z
-    
-    def transform(self, Y_raw):
-        """
-        Aplica a transformação aprendida em novos dados sem re-treinar.
-        Uso: Validação, Teste e Predição em produção.
-        """
-        if not self.is_fitted:
-            raise RuntimeError("O compressor precisa ser treinado (fit) antes de transformar novos dados.")
-        
-        return self.model.transform(Y_raw)
 
-    def inverse_transform(self, Z_latente):
-        """
-        Reconstrói a série temporal a partir dos componentes latentes.
-        Decoder: Z -> Y
-        """
+        explained = float(np.sum(self._pca.explained_variance_ratio_))
+        logger.info(
+            "PCA reduced to %d components (explained variance: %.4f).",
+            self._pca.n_components_,
+            explained,
+        )
+        return z
+
+    def transform(self, y_raw: np.ndarray) -> np.ndarray:
+        """Project new data into the learned latent space (no re-fitting)."""
         if not self.is_fitted:
-            raise RuntimeError("O compressor precisa ser treinado antes de inverter.")
-        return self.model.inverse_transform(Z_latente)
+            raise RuntimeError("Compressor must be fitted before calling transform().")
+        return self._pca.transform(y_raw)
+
+    def inverse_transform(self, z_latent: np.ndarray) -> np.ndarray:
+        """Reconstruct time-series from latent components."""
+        if not self.is_fitted:
+            raise RuntimeError("Compressor must be fitted before calling inverse_transform().")
+        return self._pca.inverse_transform(z_latent)

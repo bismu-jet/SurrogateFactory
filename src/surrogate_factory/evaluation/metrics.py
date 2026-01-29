@@ -1,48 +1,71 @@
-"""
-Módulo para calcular métricas de performance de modelos de regressão.
-"""
-import numpy as np
-from sklearn.metrics import r2_score, mean_squared_error
+"""Regression performance metrics for surrogate model evaluation."""
+
+import logging
 from typing import Dict
 
+import numpy as np
+from sklearn.metrics import mean_squared_error, r2_score
+
+logger = logging.getLogger(__name__)
+
+
 def calculate_r2(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """Calculate the R-squared (coefficient of determination) score.
+
+    Args:
+        y_true: Ground-truth values.
+        y_pred: Predicted values.
+
+    Returns:
+        R² score (closer to 1.0 is better).
     """
-    Calcula o score R-quadrado (R²). Próximo de 1.0 é melhor.
-    """
-    return r2_score(y_true, y_pred)
+    return float(r2_score(y_true, y_pred))
+
 
 def calculate_rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """
-    Calcula a Raiz do Erro Quadrático Médio (RMSE). Menor é melhor.
-    """
-    return np.sqrt(mean_squared_error(y_true, y_pred))
+    """Calculate the Root Mean Squared Error.
 
-def generate_performace_report(y_true_flat: np.ndarray, y_pred_flat: np.ndarray, n_samples: int, n_timesteps: int) -> Dict[str, float]:
-    """
-    Gera um relatório completo de métricas (Globais e por Run).
-    
     Args:
-        y_true_flat: Array 1D com todos os valores reais concatenados.
-        y_pred_flat: Array 1D com todos os valores previstos concatenados.
-        n_samples: Número de runs (amostras).
-        n_timesteps: Número de passos de tempo por run.
-        
+        y_true: Ground-truth values.
+        y_pred: Predicted values.
+
     Returns:
-        Dict com as métricas calculadas.
+        RMSE value (lower is better).
     """
-    rmse_global = calculate_rmse(y_true_flat,y_pred_flat)
-    r2_global = calculate_r2(y_true_flat,y_pred_flat)
+    return float(np.sqrt(mean_squared_error(y_true, y_pred)))
+
+
+def generate_performance_report(
+    y_true_flat: np.ndarray,
+    y_pred_flat: np.ndarray,
+    n_samples: int,
+    n_timesteps: int,
+) -> Dict[str, float]:
+    """Generate a summary report of global and per-run metrics.
+
+    Args:
+        y_true_flat: 1-D array of all ground-truth values (concatenated).
+        y_pred_flat: 1-D array of all predicted values (concatenated).
+        n_samples: Number of simulation runs.
+        n_timesteps: Number of time-steps per run.
+
+    Returns:
+        Dictionary with ``rmse_global``, ``r2_global``, ``rmse_mean_run``,
+        and ``rmse_std_run``.
+    """
+    rmse_global = calculate_rmse(y_true_flat, y_pred_flat)
+    r2_global = calculate_r2(y_true_flat, y_pred_flat)
 
     y_true_runs = y_true_flat.reshape(n_samples, n_timesteps)
     y_pred_runs = y_pred_flat.reshape(n_samples, n_timesteps)
 
-    run_rmses = []
+    run_rmses: list[float] = []
     for i in range(n_samples):
-        err = calculate_rmse(y_true_runs[i], y_pred_runs[i])
-        run_rmses(err)
-    return{
-        'rmse_global': rmse_global,
-        'r2_global': r2_global,
-        'rmse_mean_run': np.mean(run_rmses),
-        'rmse_std_run': np.std(run_rmses)
+        run_rmses.append(calculate_rmse(y_true_runs[i], y_pred_runs[i]))
+
+    return {
+        "rmse_global": rmse_global,
+        "r2_global": r2_global,
+        "rmse_mean_run": float(np.mean(run_rmses)),
+        "rmse_std_run": float(np.std(run_rmses)),
     }

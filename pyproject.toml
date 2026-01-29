@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "A factory for creating surrogate models (Kriging, RBF, Neural Network) for expensive simulations"
 readme = "CLAUDE.md"
 license = {text = "MIT"}
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [
     {name = "SurrogateFactory Contributors"}
 ]
@@ -20,7 +20,7 @@ keywords = [
     "rbf",
     "neural-network",
     "simulation",
-    "machine-learning"
+    "machine-learning",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -29,7 +29,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -46,9 +45,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+api = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.22.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    "httpx>=0.24.0",
+    "ruff>=0.4.0",
+    "mypy>=1.8.0",
+    "surrogate-factory[api]",
 ]
 
 [project.urls]
@@ -62,8 +69,51 @@ where = ["src"]
 [tool.setuptools.package-data]
 "*" = ["py.typed"]
 
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+
+# ---------------------------------------------------------------------------
+# Ruff (linter + formatter)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "S",    # flake8-bandit (security)
+]
+ignore = [
+    "S301",   # pickle usage (required for model persistence)
+    "S603",   # subprocess (not used in this project)
+    "N803",   # argument name uppercase (numpy convention X_train)
+    "N806",   # variable name uppercase (numpy convention)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]  # allow assert in tests
+
+# ---------------------------------------------------------------------------
+# Mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true

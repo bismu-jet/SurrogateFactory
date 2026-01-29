@@ -1,0 +1,20 @@
+version: "3.9"
+
+services:
+  surrogate-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      SURROGATE_MODEL_PATH: /app/model.pkl
+      LOG_LEVEL: INFO
+    volumes:
+      - ./model.pkl:/app/model.pkl:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
