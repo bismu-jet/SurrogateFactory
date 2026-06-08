@@ -22,7 +22,9 @@ spec:
         runAsGroup: 1000
       containers:
         - name: api
-          image: surrogate-factory:latest
+          # Pin to an immutable tag (prefer a sha256 digest in production)
+          # instead of the mutable :latest, so rollouts are reproducible.
+          image: surrogate-factory:0.1.0
           ports:
             - containerPort: 8000
               protocol: TCP

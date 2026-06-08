@@ -14,12 +14,8 @@ from surrogate_factory.parsers.esss_json_parser import (
 METADATA_FILE = Path(
     r"C:\PFC\SurrogateFactory\Data Pipeline\esss 3phase lgr field.global-sa-input.json"
 )
-RUN_DATA_FILE = Path(
-    r"C:\PFC\SurrogateFactory\Data Pipeline\esss 3phase lgr field.runs-specs.json"
-)
-RESULTS_BASE_DIR = Path(
-    r"C:\PFC\SurrogateFactory\Data Pipeline\esss 3phase lgr field"
-)
+RUN_DATA_FILE = Path(r"C:\PFC\SurrogateFactory\Data Pipeline\esss 3phase lgr field.runs-specs.json")
+RESULTS_BASE_DIR = Path(r"C:\PFC\SurrogateFactory\Data Pipeline\esss 3phase lgr field")
 
 REAL_DATA_EXISTS = RUN_DATA_FILE.is_file()
 

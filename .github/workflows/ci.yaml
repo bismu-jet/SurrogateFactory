@@ -30,7 +30,9 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[dev]"
-      - run: pytest tests/ -v --tb=short
+      # Coverage ratchet: keep the floor just below the current level and raise
+      # it as tests are added (current baseline ~70%).
+      - run: pytest tests/ -v --tb=short --cov=src/surrogate_factory --cov-report=term-missing --cov-fail-under=70
 
   build:
     needs: [lint, test]

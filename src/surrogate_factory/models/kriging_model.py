@@ -1,8 +1,8 @@
 """Kriging (Gaussian Process) surrogate model implementation."""
 
 import logging
+import warnings
 from collections import namedtuple
-from typing import List, Optional
 
 import numpy as np
 from smt.surrogate_models import KRG
@@ -10,6 +10,12 @@ from smt.surrogate_models import KRG
 logger = logging.getLogger(__name__)
 
 KrigingParameters = namedtuple("KrigingParameters", ["poly", "corr"])
+
+# Hyperparameter search space (module-level so it can be tuned/overridden).
+KRIGING_POLYNOMIALS = ["constant", "linear", "quadratic"]
+KRIGING_CORRELATIONS = ["matern32", "matern52", "squar_exp"]
+# Number of optimiser restarts for the GP hyperparameters (higher = slower).
+KRIGING_N_START = 5
 
 
 def _build_and_tune_single_kriging(
@@ -30,37 +36,46 @@ def _build_and_tune_single_kriging(
         The best-performing ``KRG`` model on the validation set.
     """
     trained_models: dict[KrigingParameters, KRG] = {}
-    best_params: Optional[KrigingParameters] = None
+    best_params: KrigingParameters | None = None
     smallest_error = float("inf")
 
-    polynomials = ["constant", "linear", "quadratic"]
-    correlations = ["matern32"]
-
-    for poly in polynomials:
-        for corr in correlations:
+    for poly in KRIGING_POLYNOMIALS:
+        for corr in KRIGING_CORRELATIONS:
             params = KrigingParameters(poly=poly, corr=corr)
+            # Candidate combinations are expected to fail (e.g. an over-determined
+            # polynomial when n_samples is small, or a singular correlation
+            # matrix); silence their warnings and skip them rather than aborting.
             try:
-                model = KRG(poly=poly, corr=corr, print_global=False, n_start=10, nugget=1e-8)
-                model.set_training_values(x_train, y_train_scalar)
-                model.train()
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    model = KRG(
+                        poly=poly,
+                        corr=corr,
+                        print_global=False,
+                        n_start=KRIGING_N_START,
+                        nugget=1e-8,
+                    )
+                    model.set_training_values(x_train, y_train_scalar)
+                    model.train()
+                    y_pred_val = model.predict_values(x_val)
 
-                y_pred_val = model.predict_values(x_val)
                 error = float(np.sqrt(np.mean((y_pred_val - y_val_scalar) ** 2)))
-
                 trained_models[params] = model
                 if error < smallest_error:
                     smallest_error = error
                     best_params = params
-            except (np.linalg.LinAlgError, ValueError):
+            except Exception:
                 logger.debug("Kriging combination poly=%s corr=%s failed; skipping.", poly, corr)
                 continue
 
     if best_params is None:
         logger.warning("All Kriging hyperparameter combinations failed; using fallback.")
         best_params = KrigingParameters(poly="constant", corr="squar_exp")
-        fallback = KRG(poly=best_params.poly, corr=best_params.corr, print_global=False)
-        fallback.set_training_values(x_train, y_train_scalar)
-        fallback.train()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fallback = KRG(poly=best_params.poly, corr=best_params.corr, print_global=False)
+            fallback.set_training_values(x_train, y_train_scalar)
+            fallback.train()
         trained_models[best_params] = fallback
 
     return trained_models[best_params]
@@ -70,7 +85,7 @@ class KrigingVectorModel:
     """Ensemble of per-component Kriging models for vector-valued output."""
 
     def __init__(self) -> None:
-        self.models_per_timestep: List[KRG] = []
+        self.models_per_timestep: list[KRG] = []
         self.num_timesteps: int = 0
 
     def train(
@@ -114,3 +129,13 @@ class KrigingVectorModel:
         """
         predictions = [model.predict_values(x_sample) for model in self.models_per_timestep]
         return np.hstack(predictions)
+
+    def predict_variances(self, x_sample: np.ndarray) -> np.ndarray:
+        """Predict the Kriging variance for each latent component.
+
+        Returns:
+            Variances ``(n_samples, n_components)`` in the (standardised) latent
+            space the models were trained on.
+        """
+        variances = [model.predict_variances(x_sample) for model in self.models_per_timestep]
+        return np.hstack(variances)

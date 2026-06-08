@@ -8,6 +8,37 @@ from sklearn.preprocessing import MinMaxScaler
 from surrogate_factory.preprocessing.processor import process_data_multi_model
 
 
+def test_alignment_drops_runs_missing_qoi():
+    """A run present in features but absent from the QoI dict must be dropped
+    from *both* X and Y so the rows stay aligned by index."""
+    df = pd.DataFrame({"run_number": [1, 2, 3, 4, 5], "feat": [10.0, 20, 30, 40, 50]})
+    # Run 3 has no QoI entry (4/5 kept => 20% dropped, at the allowed limit).
+    qois = {
+        1: {"q": [1.0, 2, 3]},
+        2: {"q": [2.0, 3, 4]},
+        4: {"q": [4.0, 5, 6]},
+        5: {"q": [5.0, 6, 7]},
+    }
+    result = process_data_multi_model(df, qois, df, qois, df, qois, metadata={})
+
+    assert result["X_train_raw"].shape[0] == 4
+    assert result["y_train_per_qoi"]["q"].shape[0] == 4
+    assert result["X_test_raw"].shape[0] == result["y_test_per_qoi"]["q"].shape[0]
+    assert len(result["test_run_ids"]) == 4
+    assert result["y_test_per_qoi_physical"]["q"].shape == (4, 3)
+
+
+def test_alignment_raises_when_too_many_missing():
+    """Dropping more than max_drop_fraction of runs signals a systematic
+    problem and must raise rather than silently train on a fraction."""
+    df = pd.DataFrame({"run_number": [1, 2, 3, 4, 5], "feat": [10.0, 20, 30, 40, 50]})
+    sparse = {1: {"q": [1.0, 2, 3]}, 2: {"q": [2.0, 3, 4]}}  # 3/5 = 60% missing
+    full = {i: {"q": [float(i), i + 1, i + 2]} for i in [1, 2, 3, 4, 5]}
+
+    with pytest.raises(RuntimeError, match="Too many runs"):
+        process_data_multi_model(df, sparse, df, full, df, full, metadata={})
+
+
 def test_process_data_multi_model():
     """Verify shapes, scaling bounds, and QoI consistency filtering."""
     metadata = {"Categorical_Feature": ["A", "B"]}

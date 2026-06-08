@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: surrogate-model-pvc
+  labels:
+    app.kubernetes.io/name: surrogate-factory
+    app.kubernetes.io/component: model-storage
+spec:
+  accessModes:
+    # ReadOnlyMany lets every replica mount the same trained model read-only.
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

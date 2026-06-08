@@ -69,6 +69,8 @@ def test_predict(client):
     assert "outputs" in body["predictions"]
     assert len(body["predictions"]["outputs"]) == 1
     assert len(body["predictions"]["outputs"][0]) == 3
+    # Targets range up to 27; physical predictions must exceed the [0,1] scale.
+    assert max(body["predictions"]["outputs"][0]) > 1.0
 
 
 def test_model_info(client):

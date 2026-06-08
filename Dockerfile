@@ -8,11 +8,12 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-COPY pyproject.toml requirements.txt ./
+COPY pyproject.toml requirements.lock ./
 COPY src/ src/
 
+# Build wheels from the pinned lock (reproducible) plus the package itself.
 RUN pip install --no-cache-dir --upgrade pip \
- && pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.txt \
+ && pip wheel --no-cache-dir --wheel-dir /wheels -r requirements.lock \
  && pip wheel --no-cache-dir --wheel-dir /wheels .
 
 # ---------------------------------------------------------------------------
@@ -30,8 +31,10 @@ RUN groupadd --gid 1000 app \
 WORKDIR /app
 
 COPY --from=builder /wheels /wheels
-RUN pip install --no-cache-dir --no-index --find-links=/wheels surrogate_factory \
- && pip install --no-cache-dir fastapi uvicorn[standard] \
+# Install the package and its API server entirely from the pre-built wheels
+# (no index access => reproducible, offline-capable runtime build).
+RUN pip install --no-cache-dir --no-index --find-links=/wheels \
+        surrogate-factory fastapi "uvicorn[standard]" \
  && rm -rf /wheels
 
 # Copy only what the runtime needs.

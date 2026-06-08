@@ -4,9 +4,8 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
@@ -24,7 +23,7 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 # ---------------------------------------------------------------------------
 # Global state
 # ---------------------------------------------------------------------------
-_factory: Optional[SurrogateFactory] = None
+_factory: SurrogateFactory | None = None
 
 
 @asynccontextmanager
@@ -36,7 +35,9 @@ async def lifespan(app: FastAPI):
     if model_file.exists():
         logger.info("Loading model from %s", model_file)
         _factory = SurrogateFactory.load_model(model_file)
-        logger.info("Model ready (type=%s, QoIs=%s).", _factory.model_type.value, _factory.qoi_names)
+        logger.info(
+            "Model ready (type=%s, QoIs=%s).", _factory.model_type.value, _factory.qoi_names
+        )
     else:
         logger.warning("Model file not found at %s. /predict will return 503.", model_file)
     yield
@@ -57,7 +58,7 @@ app = FastAPI(
 class PredictionRequest(BaseModel):
     """Input features for prediction."""
 
-    features: List[Dict[str, Any]] = Field(
+    features: list[dict[str, Any]] = Field(
         ...,
         description="List of feature dictionaries. Each dict maps feature names to values.",
         examples=[[{"Feature_A": 5.0, "Feature_B": 105.0, "Categoria": "A"}]],
@@ -67,7 +68,7 @@ class PredictionRequest(BaseModel):
 class PredictionResponse(BaseModel):
     """Prediction results per QoI."""
 
-    predictions: Dict[str, List[List[float]]] = Field(
+    predictions: dict[str, list[list[float]]] = Field(
         ...,
         description="Mapping from QoI name to a list of predicted time-series vectors.",
     )
@@ -76,8 +77,8 @@ class PredictionResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     model_loaded: bool
-    model_type: Optional[str] = None
-    qoi_names: List[str] = []
+    model_type: str | None = None
+    qoi_names: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +121,7 @@ async def predict(request: PredictionRequest) -> PredictionResponse:
             detail=str(exc),
         ) from exc
 
-    response_data: Dict[str, List[List[float]]] = {}
+    response_data: dict[str, list[list[float]]] = {}
     for qoi_name, arr in raw_preds.items():
         response_data[qoi_name] = arr.tolist()
 
@@ -128,7 +129,7 @@ async def predict(request: PredictionRequest) -> PredictionResponse:
 
 
 @app.get("/model/info", tags=["info"])
-async def model_info() -> Dict[str, Any]:
+async def model_info() -> dict[str, Any]:
     """Return metadata about the loaded model."""
     if _factory is None:
         raise HTTPException(status_code=503, detail="No model loaded.")
