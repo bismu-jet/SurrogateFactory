@@ -75,6 +75,8 @@ class PredictionResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
+    """Liveness payload: ``status`` is ``"ok"`` once a model is loaded, else ``"no_model"``."""
+
     status: str
     model_loaded: bool
     model_type: str | None = None

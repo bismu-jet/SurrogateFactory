@@ -26,49 +26,6 @@ def _short_qoi(qoi_name: str) -> str:
     return qoi_name.split(" - project")[0]
 
 
-def plot_feature_distribution(
-    x_data: pd.DataFrame,
-    save_path: str = "feature_distribution.png",
-) -> None:
-    """Scatter-plot of training samples in feature space (best for 2-D)."""
-    if x_data.shape[1] != 2:
-        logger.warning(
-            "Feature distribution plot works best with exactly 2 features; got %d.",
-            x_data.shape[1],
-        )
-        return
-
-    plt.figure(figsize=(8, 6))
-    plt.scatter(x_data.iloc[:, 0], x_data.iloc[:, 1], alpha=0.7)
-    plt.title("Training Sample Distribution in Feature Space")
-    plt.xlabel("Feature 1 (scaled)")
-    plt.ylabel("Feature 2 (scaled)")
-    plt.grid(True)
-    plt.savefig(save_path)
-    plt.close()
-    logger.info("Feature distribution plot saved to %s", save_path)
-
-
-def plot_target_timeseries(
-    y_data: np.ndarray,
-    num_to_plot: int = 5,
-    save_path: str = "target_timeseries.png",
-) -> None:
-    """Plot a handful of target time-series curves."""
-    plt.figure(figsize=(12, 6))
-    num_to_plot = min(num_to_plot, len(y_data))
-    for i in range(num_to_plot):
-        plt.plot(y_data[i], label=f"Sample {i + 1}", alpha=0.8)
-    plt.title(f"First {num_to_plot} Target Time-Series (y_train)")
-    plt.xlabel("Time-Step")
-    plt.ylabel("Output Value")
-    plt.legend()
-    plt.grid(True)
-    plt.savefig(save_path)
-    plt.close()
-    logger.info("Target time-series plot saved to %s", save_path)
-
-
 def plot_comparison_timeseries(
     y_true: np.ndarray,
     y_pred_new: np.ndarray,
@@ -158,10 +115,11 @@ def plot_multimodel_timeseries(
 
 
 def plot_benchmark_bars(table: pd.DataFrame, output_dir: str | Path) -> None:
-    """Grouped bar charts comparing the models per QoI, plus training time.
+    """Grouped bar charts comparing the models per QoI.
 
-    Writes ``bench_rmse_mean.png``, ``bench_nrmse.png``, ``bench_r2_mean.png``
-    and ``bench_train_time.png`` under *output_dir*.
+    Writes ``bench_<metric>.png`` under *output_dir* for each of
+    ``global_r2``, ``rmse_mean``, ``nrmse`` and ``r2_mean`` present in *table*.
+    Timing is plotted separately by :func:`plot_timing`.
     """
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

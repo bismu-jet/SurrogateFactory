@@ -56,39 +56,3 @@ def calculate_rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
         RMSE value (lower is better).
     """
     return float(np.sqrt(mean_squared_error(y_true, y_pred)))
-
-
-def generate_performance_report(
-    y_true_flat: np.ndarray,
-    y_pred_flat: np.ndarray,
-    n_samples: int,
-    n_timesteps: int,
-) -> dict[str, float]:
-    """Generate a summary report of global and per-run metrics.
-
-    Args:
-        y_true_flat: 1-D array of all ground-truth values (concatenated).
-        y_pred_flat: 1-D array of all predicted values (concatenated).
-        n_samples: Number of simulation runs.
-        n_timesteps: Number of time-steps per run.
-
-    Returns:
-        Dictionary with ``rmse_global``, ``r2_global``, ``rmse_mean_run``,
-        and ``rmse_std_run``.
-    """
-    rmse_global = calculate_rmse(y_true_flat, y_pred_flat)
-    r2_global = calculate_r2(y_true_flat, y_pred_flat)
-
-    y_true_runs = y_true_flat.reshape(n_samples, n_timesteps)
-    y_pred_runs = y_pred_flat.reshape(n_samples, n_timesteps)
-
-    run_rmses: list[float] = []
-    for i in range(n_samples):
-        run_rmses.append(calculate_rmse(y_true_runs[i], y_pred_runs[i]))
-
-    return {
-        "rmse_global": rmse_global,
-        "r2_global": r2_global,
-        "rmse_mean_run": float(np.mean(run_rmses)),
-        "rmse_std_run": float(np.std(run_rmses)),
-    }

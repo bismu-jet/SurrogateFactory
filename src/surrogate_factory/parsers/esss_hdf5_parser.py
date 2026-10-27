@@ -66,12 +66,18 @@ def load_specs_and_log_qois_for_runs(
     targets from the HDF5 transient logs instead of ``sa_summary.json``.
 
     Args:
+        run_specs_path: Path to ``runs-specs.json``.
+        results_base_dir: Base directory with one ``<project>_R<NNNNN>`` sub-folder
+            per run (see :func:`esss_json_parser.load_specs_and_qois_for_runs`).
+        run_numbers_to_load: Run numbers to load.
         quantity_names: Exact transient-curve names to extract (e.g.
             ``["Producer H2S Water Concentration"]``).
+        result_filename: Name of the per-run HDF5 result file.
 
     Returns:
-        ``(features_df, {run_number: {qoi_label: series}})`` for runs that both
-        appear in the run specs and yield at least one requested curve.
+        ``(features_df, {run_number: {qoi_label: series}})``.  The dictionary
+        holds every requested run that yields at least one curve; the
+        DataFrame keeps only those runs that also appear in the run specs.
     """
     all_features_df = _parse_run_specs(run_specs_path)
     if all_features_df.empty:
