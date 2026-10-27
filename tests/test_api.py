@@ -42,7 +42,8 @@ def trained_factory(tmp_path: Path):
 def client(trained_factory):
     """Create a test client with the model loaded."""
     with patch.dict("os.environ", {"SURROGATE_MODEL_PATH": str(trained_factory)}):
-        # Re-import to pick up env var
+        # MODEL_PATH is read on first import only: later tests reuse the cached
+        # module and therefore the first test's model file.
         from surrogate_factory.api.app import app
 
         with TestClient(app) as c:

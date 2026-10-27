@@ -1,4 +1,4 @@
-"""End-to-end results generation shared by the dataset-specific scripts.
+"""End-to-end results generation for one dataset.
 
 Given features + per-run QoIs + metadata, this trains every model on one shared
 split and emits: a physical-unit benchmark table, comparison bar charts,
@@ -56,7 +56,10 @@ def _array_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
 
 
 def calculate_r2_safe(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """Per-run R² with a constant-target guard (matches the factory's logic)."""
+    """Per-run R² with a constant-target guard (variance < 1e-12).
+
+    Same rule as :meth:`SurrogateFactory.evaluate_and_plot`, which uses 1e-9.
+    """
     if float(np.var(y_true)) < 1e-12:
         return 1.0 if calculate_rmse(y_true, y_pred) < 1e-5 else 0.0
     return float(r2_score(y_true, y_pred))
@@ -167,12 +170,13 @@ def _cross_validation(
     model_types: list[ModelType],
     random_state: int,
     n_pca_components: float | int | None = None,
+    n_jobs: int = 1,
 ) -> None:
     """K-fold CV for each model type; writes ``cv_metrics.csv``."""
     rows: list[dict[str, Any]] = []
     for model_type in model_types:
         logger.info("Cross-validating %s.", model_type.value)
-        factory = SurrogateFactory(model_type)
+        factory = SurrogateFactory(model_type, n_jobs=n_jobs)
         factory.set_data(df_features.copy(), qois)
         factory.metadata = metadata
         if n_pca_components is not None:
@@ -283,6 +287,7 @@ def analyze_pca_speed_impact(
     component_grid: tuple[int, ...] = (2, 4, 8, 16, 32),
     model_types: list[ModelType] | None = None,
     random_state: int = 42,
+    n_jobs: int = 1,
 ) -> pd.DataFrame:
     """Quantify how PCA component count drives speed and accuracy.
 
@@ -304,7 +309,7 @@ def analyze_pca_speed_impact(
     rows: list[dict[str, Any]] = []
     for model_type in model_types:
         for n_comp in component_grid:
-            factory = SurrogateFactory(model_type)
+            factory = SurrogateFactory(model_type, n_jobs=n_jobs)
             factory.set_data(df_features.copy(), single)
             factory.metadata = metadata
             factory.n_pca_components = int(n_comp)
@@ -376,12 +381,14 @@ def produce_full_results(
     run_cv: bool = True,
     n_pca_components: float | int | None = None,
     analyze_pca_speed: bool = False,
+    n_jobs: int = 1,
 ) -> pd.DataFrame:
     """Run the full comparison and write every artefact under *output_dir*.
 
     Args:
         analyze_pca_speed: Also sweep PCA component count to quantify its impact
             on training/inference speed and accuracy (extra runtime).
+        n_jobs: QoIs trained in parallel per model (see :class:`SurrogateFactory`).
     """
     model_types = model_types or DEFAULT_MODEL_TYPES
     output_dir = Path(output_dir)
@@ -398,6 +405,7 @@ def produce_full_results(
         random_state=random_state,
         return_factories=True,
         n_pca_components=n_pca_components,
+        n_jobs=n_jobs,
     )
     table = _append_ensemble(table, factories, output_dir)
     print("\n=== Benchmark (physical units) ===")
@@ -416,10 +424,19 @@ def produce_full_results(
             factories[ModelType.KRIGING], df_features, qois, output_dir, n_sample_plots
         )
     if analyze_pca_speed:
-        analyze_pca_speed_impact(df_features, qois, metadata, output_dir, model_types=model_types)
+        analyze_pca_speed_impact(
+            df_features, qois, metadata, output_dir, model_types=model_types, n_jobs=n_jobs
+        )
     if run_cv:
         _cross_validation(
-            df_features, qois, metadata, output_dir, model_types, random_state, n_pca_components
+            df_features,
+            qois,
+            metadata,
+            output_dir,
+            model_types,
+            random_state,
+            n_pca_components,
+            n_jobs,
         )
 
     logger.info("All results written to %s", output_dir)

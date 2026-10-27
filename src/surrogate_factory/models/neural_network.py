@@ -57,7 +57,7 @@ class NeuralNetworkModel:
             activation=self.activation,
             solver="adam",
             alpha=self.alpha,
-            max_iter=1,  # one optimiser step per outer iteration (warm_start)
+            max_iter=1,  # one epoch per outer iteration (warm_start)
             warm_start=True,
             random_state=42,
             verbose=False,

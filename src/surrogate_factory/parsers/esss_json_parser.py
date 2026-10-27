@@ -95,7 +95,8 @@ def _parse_single_sa_summary(file_path: Path) -> dict[str, list[float]]:
 
     Returns:
         ``{qoi_name: [float values]}`` where *qoi_name* is
-        ``"{caption} - {study_id}"``.
+        ``"{caption} - {study_id}"``, or ``"{caption} - {index}"`` when the
+        curve has no study id.
     """
     if not file_path.is_file():
         return {}
@@ -129,7 +130,9 @@ def load_specs_and_qois_for_runs(
 
     Args:
         run_specs_path: Path to ``runs-specs.json``.
-        results_base_dir: Base directory containing ``R_000XX`` sub-folders.
+        results_base_dir: Base directory containing one ``<project>_R<NNNNN>``
+            sub-folder per run, where ``<project>`` is the specs file name
+            without ``.runs-specs.json``.
         run_numbers_to_load: Run numbers to load.
         result_filename: Name of the per-run result file.
 

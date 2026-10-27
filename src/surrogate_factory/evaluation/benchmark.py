@@ -25,6 +25,7 @@ def benchmark_models(
     make_plots: bool = True,
     return_factories: bool = False,
     n_pca_components: float | int | None = None,
+    n_jobs: int = 1,
 ) -> "pd.DataFrame | tuple[pd.DataFrame, dict[ModelType, SurrogateFactory]]":
     """Train each model type on the **same** split and tabulate physical metrics.
 
@@ -37,6 +38,7 @@ def benchmark_models(
         reference_qois: Optional physical baseline predictions for comparison.
         return_factories: When True, also return the trained factories so the
             caller can reuse them (e.g. for overlay plots) without retraining.
+        n_jobs: QoIs trained in parallel per model (see :class:`SurrogateFactory`).
 
     Returns:
         A metrics table (one row per model/QoI); or, when *return_factories* is
@@ -49,7 +51,7 @@ def benchmark_models(
     rows: list[dict[str, Any]] = []
     for model_type in model_types:
         logger.info("Benchmarking model type: %s", model_type.value)
-        factory = SurrogateFactory(model_type)
+        factory = SurrogateFactory(model_type, n_jobs=n_jobs)
         factory.set_data(df_features.copy(), qois_dict)
         factory.metadata = metadata
         if n_pca_components is not None:

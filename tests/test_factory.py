@@ -129,3 +129,53 @@ def test_workflow_neural_network(fake_data_files):
     x_new = pd.DataFrame({"Feature_A": [5.0], "Feature_B": [105.0], "Categoria": ["A"]})
     preds = factory.predict(x_new)
     assert preds["outputs"].shape == (1, 3)
+
+
+def _write_nested(tmp_path: Path, id_column: str = "run_id") -> tuple[Path, Path]:
+    """Two QoIs per run in the ``{run_id: {qoi: vector}}`` layout."""
+    n = 12
+    x = np.linspace(0.0, 1.0, n)
+    df = pd.DataFrame({id_column: list(range(n)), "x": x})
+    feat_path = tmp_path / "features.csv"
+    df.to_csv(feat_path, index=False)
+
+    targets = {
+        str(i): {
+            "rate": [10.0 * x[i] + t for t in range(4)],
+            "pressure": [200.0 - 5.0 * x[i] * t for t in range(4)],
+        }
+        for i in range(n)
+    }
+    target_path = tmp_path / "targets.json"
+    target_path.write_text(json.dumps(targets))
+    return feat_path, target_path
+
+
+@pytest.mark.parametrize("id_column", ["run_id", "run_number"])
+def test_load_data_nested_targets_keep_qoi_names(tmp_path: Path, id_column: str):
+    feat_path, target_path = _write_nested(tmp_path, id_column=id_column)
+
+    factory = SurrogateFactory(ModelType.RBF)
+    factory.load_data(feat_path, target_path)
+    factory.train(test_size=0.25, val_size=0.25)
+
+    assert sorted(factory.trained_models_per_qoi) == ["pressure", "rate"]
+    preds = factory.predict(pd.DataFrame({"x": [0.5]}))
+    assert preds["rate"].shape == (1, 4)
+
+
+@pytest.mark.parametrize("model_type", list(ModelType))
+def test_parallel_training_matches_serial(tmp_path: Path, model_type: ModelType):
+    feat_path, target_path = _write_nested(tmp_path)
+    x_new = pd.DataFrame({"x": [0.1, 0.55, 0.9]})
+
+    preds = {}
+    for n_jobs in (1, -1):
+        factory = SurrogateFactory(model_type, n_jobs=n_jobs)
+        factory.load_data(feat_path, target_path)
+        factory.train(test_size=0.25, val_size=0.25)
+        preds[n_jobs] = factory.predict(x_new)
+
+    assert preds[1].keys() == preds[-1].keys()
+    for qoi_name in preds[1]:
+        np.testing.assert_array_equal(preds[1][qoi_name], preds[-1][qoi_name])

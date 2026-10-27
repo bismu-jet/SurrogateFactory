@@ -19,7 +19,7 @@ def load_standard_format(
 
     Args:
         features_path: Path to the ``.csv`` file containing input features.
-            Must include a ``run_id`` column.
+            Must include a ``run_id`` (or ``run_number``) column.
         targets_path: Path to the ``.json`` file mapping run IDs to output
             vectors (either ``{run_id: [values]}`` or
             ``{run_id: {qoi_name: [values]}}``).
@@ -29,8 +29,8 @@ def load_standard_format(
     Returns:
         A tuple of:
         1. A ``DataFrame`` of features (filtered to matching runs).
-        2. A dictionary of QoIs in the shape
-           ``{run_id: {'outputs': <time-series>}}``.
+        2. A dictionary ``{run_id: {qoi_name: <time-series>}}``; a flat
+           ``{run_id: [values]}`` file yields the single QoI ``'outputs'``.
 
     Raises:
         FileNotFoundError: If either input file does not exist.
@@ -41,6 +41,8 @@ def load_standard_format(
         )
 
     df_features = pd.read_csv(features_path)
+    if "run_number" in df_features.columns and "run_id" not in df_features.columns:
+        df_features = df_features.rename(columns={"run_number": "run_id"})
     df_features["run_id"] = df_features["run_id"].astype(str)
 
     with open(targets_path, encoding="UTF-8") as fh:
@@ -54,9 +56,9 @@ def load_standard_format(
         df_features = df_features[df_features["run_id"].isin(targets_dict.keys())].copy()
 
     qois_per_run: dict[str, dict[str, Any]] = {}
-    for run_id, time_series in targets_dict.items():
+    for run_id, targets in targets_dict.items():
         if run_id in df_features["run_id"].values:
-            qois_per_run[run_id] = {"outputs": time_series}
+            qois_per_run[run_id] = targets if isinstance(targets, dict) else {"outputs": targets}
 
     df_features = df_features[df_features["run_id"].isin(qois_per_run.keys())].reset_index(
         drop=True

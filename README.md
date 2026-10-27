@@ -11,8 +11,8 @@ quantification, and a REST API for serving.
 A reservoir simulation emits a long time-series (e.g. **500 time-steps**) per QoI.
 Trying to predict those 500 outputs **directly** is the trap: the model fights a
 500-dimensional, heavily-correlated output space with only a few hundred training
-runs. The result is a negative R², noisy curves, and physically impossible
-oscillations — a metamodel useless for engineering.
+runs, and nothing stops neighbouring time-steps from disagreeing with each
+other.
 
 The insight that makes it work is **PCA on the output time-series**. The clever
 bit is *where* PCA is applied: **not on the inputs** (the usual textbook use of
@@ -32,9 +32,8 @@ latent modes:
 The 3–4 input parameters are left untouched; it is the **high-dimensional output**
 that PCA tames.
 
-This turns an impossible `4 → 500` regression into a trivial `4 → 4` one. On the
-UNISIM-IV benchmark this lifts the held-out **global R² from negative to ≈ 1.0**
-for all three model types.
+This turns a `4 → 500` regression into a `4 → 4` one. On the UNISIM-IV benchmark
+all three model types reach a held-out **global R² ≈ 1.0** (table below).
 
 ```
 físico → MinMax → PCA → StandardScaler → [model predicts K latent scalars]
@@ -58,19 +57,17 @@ PCA buys orders of magnitude at **no accuracy cost**.
 | **Kriging** | **0.999996** | 670 s | 0.069 s |
 | Ensemble (mean) | 0.999958 | — | — |
 | Neural Network | 0.999845 | 35 s | 0.047 s |
-| RBF | 0.999759 | 54 s | 0.054 s |
+| RBF | 0.999759 | 54 s | 0.059 s |
 
-Reproduce with:
+Measured 2026-06-08 with `evaluation.reporting.produce_full_results` on UNISIM-IV
+case 3: 76 QoIs, 32 test runs, QoIs trained one after another. The dataset is not
+distributed with this repository.
 
-```bash
-python Scripts/run_caso3_unisim.py        # full deliverable under Results/Caso3 UNISIM
-python Scripts/run_caso3_unisim.py --skip-cv
-```
-
-Artefacts written per run: `benchmark_metrics.csv` (global R², RMSE, MAE, NRMSE,
-per-QoI; train/inference timing), grouped bar charts, `timing_by_model.png`,
-`pca_cumulative_variance.png`, parity plots, multi-model overlays, Kriging ±2σ
-uncertainty bands, `cv_metrics.csv` (K-fold), and `WHY_IT_WORKED.md`.
+`produce_full_results` writes per run: `benchmark_metrics.csv` (global R², RMSE,
+MAE, NRMSE, per-QoI; train/inference timing), grouped bar charts,
+`timing_by_model.png`, `pca_cumulative_variance.png`, parity plots, multi-model
+overlays, Kriging ±2σ uncertainty bands, `cv_metrics.csv` (K-fold), and
+`WHY_IT_WORKED.md`.
 
 > **Note on metrics.** The headline number is the **pooled/global R²** (variance
 > explained across all test points). The per-run R² (one curve at a time) is
@@ -82,22 +79,99 @@ uncertainty bands, `cv_metrics.csv` (K-fold), and `WHY_IT_WORKED.md`.
 > concentration* on the 10-input CaseModel campaign tops out at ≈ 0.6 (0.37 CV) —
 > an intrinsic data limit, not a method gap.
 
+## Installation
+
+```bash
+pip install -e .            # core: train, evaluate, predict, persist
+pip install -e ".[esss]"    # + h5py, for the ESSS result.sourres parser
+pip install -e ".[api]"     # + FastAPI server
+pip install -e ".[dev]"     # + pytest, ruff, mypy, build (includes api)
+```
+
+Python ≥ 3.10. `requirements.lock` pins the core + API stack for the Docker image;
+it was compiled with Python 3.13 and its pins need Python ≥ 3.11.
+
 ## Quick Start
 
 ```python
+import pandas as pd
 from surrogate_factory import SurrogateFactory, ModelType
 
-factory = SurrogateFactory(ModelType.KRIGING)  # or RBF, NN
+factory = SurrogateFactory(ModelType.KRIGING)   # or RBF, NN; n_jobs=-1 trains QoIs in parallel
 factory.load_data("features.csv", "targets.json", "metadata.json")
 factory.train(test_size=0.2, val_size=0.1)
 
-predictions = factory.predict(new_features_df)            # {qoi: (n, n_steps)} physical
-mean, std   = factory.predict_with_uncertainty(df)["q"]   # Kriging only
-cv_metrics  = factory.cross_validate(k=5)                 # K-fold mean±std
+metrics = factory.evaluate_and_plot(plot_prefix="plots/cmp")   # {qoi: {metric: value}}
+new_runs = pd.read_csv("features.csv")
+predictions = factory.predict(new_runs)                         # {qoi: (n, n_steps)} physical
 
-factory.save_model("model.pkl")                # slim (inference-only)
-factory.save_model("model.pkl", include_eval_data=True)   # keep test data too
+qoi = factory.qoi_names[0]
+mean, std = factory.predict_with_uncertainty(new_runs)[qoi]    # Kriging only
+cv_metrics = factory.cross_validate(k=5)                        # K-fold mean/std; refits
+
+factory.save_model("model.pkl")                                 # slim (inference-only)
+factory.save_model("model_eval.pkl", include_eval_data=True)    # keep test data too
+factory = SurrogateFactory.load_model("model.pkl")
 ```
+
+Already have the data in memory? `factory.set_data(features_df, {run_id: {qoi: vector}})`
+replaces `load_data`.
+
+## Data Formats
+
+**features.csv** — a `run_id` (or `run_number`) column plus numeric/categorical inputs.
+
+**targets.json** — `{"1": {"qoi_a": [t1, t2, ...], "qoi_b": [...]}}`; each QoI is
+trained as its own model. A flat `{"1": [t1, ...]}` is read as one QoI named
+`outputs`.
+
+**metadata.json** (optional) — `{"CategoryColumn": ["ValueA", "ValueB"]}` for
+ordinal encoding of categorical inputs.
+
+### ESSS studies
+
+The ESSS parsers read a sensitivity-analysis export directly: the
+`<project>.runs-specs.json` design table plus a results directory holding one
+`<project>_R<NNNNN>/` folder per run. Both return `(features_df, {run_number: {qoi: vector}})`, which goes straight
+into `set_data`:
+
+```python
+from pathlib import Path
+from surrogate_factory.parsers.esss_json_parser import load_specs_and_qois_for_runs
+from surrogate_factory.parsers.esss_hdf5_parser import load_specs_and_log_qois_for_runs  # needs [esss]
+
+specs = Path("study/project.runs-specs.json")
+results = Path("study/project")      # project_R00001/, project_R00002/, ...
+runs = list(range(1, 101))
+
+# QoIs exported to each run's sa_summary.json (e.g. H2S flow rate)
+features, qois = load_specs_and_qois_for_runs(specs, results, runs)
+
+# or any logged transient curve from each run's result.sourres (HDF5)
+features, qois = load_specs_and_log_qois_for_runs(
+    specs, results, runs, quantity_names=["Producer H2S Water Concentration"]
+)
+
+factory = SurrogateFactory(ModelType.RBF)
+factory.set_data(features, qois)
+```
+
+Categorical metadata comes from the study's `global-sa-input.json` via
+`esss_json_parser._parse_variable_metadata`; assign it to `factory.metadata`.
+
+## Performance
+
+Training dominates the cost; prediction is milliseconds. On UNISIM-IV case 3
+(76 QoIs, see Results) training took 670.7 s (Kriging), 53.7 s (RBF) and 35.1 s
+(NN), measured 2026-06-08 with QoIs trained one after another.
+
+| Knob | Where | Effect |
+|------|-------|--------|
+| `n_jobs` | `SurrogateFactory(model_type, n_jobs=-1)`, `benchmark_models`, `produce_full_results` | Trains QoIs in parallel processes; predictions are identical to `n_jobs=1` (BLAS runs on one thread per QoI either way). The models' own warnings stay in the workers |
+| `n_pca_components` | factory attribute, default `0.999` | Variance kept per QoI; Kriging fits one GP per kept component |
+| `KRIGING_N_START` | `models/kriging_model.py`, default 5 | Optimiser restarts per GP |
+| `KRIGING_POLYNOMIALS` × `KRIGING_CORRELATIONS` | `models/kriging_model.py` | 3 × 3 candidate fits per component |
+| `_DEFAULT_NUM_TRIES` | `models/rbf_model.py`, default 100 | `d0` grid size; × 3 polynomial degrees |
 
 ## Project Structure
 
@@ -110,7 +184,7 @@ src/surrogate_factory/
 │   ├── rbf_model.py        # Radial Basis Function via SMT (native multi-output)
 │   └── neural_network.py   # MLP via sklearn, manual early-stopping on the real val set
 ├── parsers/
-│   ├── general_parser.py   # CSV + JSON loader
+│   ├── general_parser.py   # CSV + JSON loader (load_data)
 │   ├── esss_json_parser.py # ESSS sa_summary.json loader
 │   └── esss_hdf5_parser.py # ESSS result.sourres (HDF5) transient-log loader
 ├── preprocessing/processor.py   # feature encoding, scaling, PCA + latent-standardisation
@@ -119,22 +193,8 @@ src/surrogate_factory/
     ├── plotting.py         # comparison / parity / PCA-variance / timing plots
     ├── benchmark.py        # train all models on one split → metrics table (+ timing)
     └── reporting.py        # full deliverable: benchmark + ensemble + plots + CV + PCA-speed
-Scripts/                    # run_caso3_unisim.py, run_pfc_concentration.py, benchmark_models.py
 tests/  k8s/  Dockerfile  docker-compose.yaml  Makefile  .github/workflows/ci.yaml
 ```
-
-## Data Formats
-
-**features.csv** — a `run_id`/`run_number` column plus numeric/categorical inputs.
-
-**targets.json** — `{ "1": {"qoi": [t1, t2, ...]} }` (or flat `{ "1": [t1, ...] }`).
-
-**metadata.json** (optional) — `{ "CategoryColumn": ["ValueA", "ValueB"] }` for
-ordinal encoding of categorical inputs.
-
-ESSS data is also read natively: per-run `sa_summary.json` (flow-rate QoIs) via
-`esss_json_parser`, and any logged scalar time-series (e.g. *H2S Water
-Concentration*) from the raw `result.sourres` HDF5 via `esss_hdf5_parser`.
 
 ## Model Types
 
@@ -147,25 +207,28 @@ Concentration*) from the raw `result.sourres` HDF5 via `esss_hdf5_parser`.
 All three are trained on the **same split** so the comparison is fair; an
 equal-weight **ensemble** is also reported and is often the most robust.
 
-## REST API
+## Development
 
 ```bash
-SURROGATE_MODEL_PATH=model.pkl uvicorn surrogate_factory.api.app:app
-# GET /healthz   POST /predict   GET /model/info
+make install lint test build    # dev deps · ruff + mypy · pytest · sdist/wheel
 ```
 
-## Docker, Kubernetes & Dev
+CI (`.github/workflows/ci.yaml`) runs lint, mypy and pytest with a coverage gate on
+Python 3.10–3.12 for pushes and PRs to `master`, then builds the wheel and the
+Docker image.
 
-```bash
-make docker-run                 # build + run via docker-compose
-kubectl apply -f k8s/           # Deployment + Service + ConfigMap + PVC
-make install lint test          # dev deps · ruff+mypy · pytest
-```
+## Serving
 
-Reproducible builds use a hashed `requirements.lock` (pip-compile); CI runs
-lint + mypy + pytest (coverage gate) across Python 3.10–3.12 and builds the image.
+The model can also be served over HTTP; this is not needed for training or
+prediction from Python.
+
+- REST: `SURROGATE_MODEL_PATH=model.pkl uvicorn surrogate_factory.api.app:app`
+  (`GET /healthz`, `POST /predict`, `GET /model/info`; needs `[api]`).
+- Docker: `make docker-run` (image built from `requirements.lock`).
+- Kubernetes: manifests in `k8s/`.
 
 ## Dependencies
 
-- **Core**: numpy, pandas, scikit-learn, smt, h5py, matplotlib, seaborn
-- **API**: fastapi, uvicorn · **Dev**: pytest, pytest-cov, httpx, ruff, mypy, pip-tools
+- **Core**: numpy, pandas, scikit-learn, joblib, threadpoolctl, smt, matplotlib, seaborn
+- **esss**: h5py · **api**: fastapi, pydantic, uvicorn · **dev**: pytest, pytest-cov,
+  httpx, ruff, mypy, build

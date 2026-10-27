@@ -3,13 +3,16 @@
 import json
 import logging
 import pickle
+import traceback
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from sklearn.model_selection import KFold, train_test_split
+from threadpoolctl import threadpool_limits
 
 from .evaluation.metrics import (
     calculate_mae,
@@ -35,6 +38,42 @@ class ModelType(Enum):
     NN = "NeuralNetwork"
 
 
+_MODEL_CLASSES: dict[ModelType, Any] = {
+    ModelType.KRIGING: KrigingVectorModel,
+    ModelType.RBF: RBFVectorModel,
+    ModelType.NN: NeuralNetworkModel,
+}
+
+
+def _train_qoi(
+    model_type: ModelType,
+    n_pca_components: float | int,
+    x_train: np.ndarray,
+    x_val: np.ndarray,
+    y_train: np.ndarray,
+    y_val: np.ndarray,
+) -> "tuple[OutputCompressor, Any] | str":
+    """Fit one QoI's compressor and model.
+
+    Runs inside a joblib worker, so a failure is returned as its formatted
+    traceback instead of raised: one bad QoI must not abort the others, and a
+    string always survives the trip back to the parent process.
+
+    BLAS is pinned to one thread, as joblib already does in its workers, so
+    serial and parallel training run the same floating-point operations.
+    """
+    try:
+        with threadpool_limits(limits=1):
+            compressor = OutputCompressor(n_components=n_pca_components)
+            z_train = compressor.fit_transform(y_train)
+            z_val = compressor.transform(y_val)
+            model = _MODEL_CLASSES[model_type]()
+            model.train(x_train, z_train, x_val, z_val)
+        return compressor, model
+    except Exception:
+        return traceback.format_exc()
+
+
 class SurrogateFactory:
     """High-level factory for training and serving surrogate models.
 
@@ -44,13 +83,21 @@ class SurrogateFactory:
         factory.load_data("features.csv", "targets.json")
         factory.train(test_size=0.2, val_size=0.1)
         predictions = factory.predict(new_features_df)
+
+    Args:
+        model_type: Surrogate backend trained for every QoI.
+        n_jobs: QoIs trained in parallel (joblib semantics: ``-1`` uses every
+            core).  Each QoI is trained independently on one BLAS thread, so
+            results do not depend on this value.  With ``n_jobs != 1`` the
+            models' own log messages stay in the worker processes.
     """
 
-    def __init__(self, model_type: ModelType) -> None:
+    def __init__(self, model_type: ModelType, n_jobs: int = 1) -> None:
         if not isinstance(model_type, ModelType):
             raise ValueError("model_type must be a ModelType member (e.g. ModelType.KRIGING).")
 
         self.model_type: ModelType = model_type
+        self.n_jobs: int = n_jobs
         self.trained_models_per_qoi: dict[str, Any] = {}
         self.compressors_per_qoi: dict[str, OutputCompressor] = {}
         self.failed_qois: list[str] = []
@@ -222,24 +269,43 @@ class SurrogateFactory:
         self.compressors_per_qoi = {}
         self.failed_qois = []
 
-        for qoi_name in self.qoi_names:
-            logger.info("Training %s model for QoI: %s", self.model_type.value, qoi_name)
-            try:
-                y_train_qoi = self.processed_data["y_train_per_qoi"][qoi_name]
-                y_val_qoi = self.processed_data["y_val_per_qoi"][qoi_name]
+        if self._uses_scaled_features():
+            x_train, x_val = (
+                self.processed_data["X_train_scaled"],
+                self.processed_data["X_val_scaled"],
+            )
+        else:
+            x_train, x_val = self.processed_data["X_train_raw"], self.processed_data["X_val_raw"]
 
-                compressor = OutputCompressor(n_components=self.n_pca_components)
-                z_train = compressor.fit_transform(y_train_qoi)
-                z_val = compressor.transform(y_val_qoi)
-
-                model = self._create_and_train_model(z_train, z_val)
-                self.compressors_per_qoi[qoi_name] = compressor
-                self.trained_models_per_qoi[qoi_name] = model
-            except Exception:
-                logger.exception(
-                    "Failed to train %s for QoI '%s'.", self.model_type.value, qoi_name
+        logger.info(
+            "Training %s for %d QoI(s) (n_jobs=%d).",
+            self.model_type.value,
+            len(self.qoi_names),
+            self.n_jobs,
+        )
+        results = Parallel(n_jobs=self.n_jobs)(
+            delayed(_train_qoi)(
+                self.model_type,
+                self.n_pca_components,
+                x_train,
+                x_val,
+                self.processed_data["y_train_per_qoi"][qoi_name],
+                self.processed_data["y_val_per_qoi"][qoi_name],
+            )
+            for qoi_name in self.qoi_names
+        )
+        for qoi_name, result in zip(self.qoi_names, results, strict=True):
+            if isinstance(result, str):
+                logger.error(
+                    "Failed to train %s for QoI '%s':\n%s",
+                    self.model_type.value,
+                    qoi_name,
+                    result,
                 )
                 self.failed_qois.append(qoi_name)
+            else:
+                logger.info("Trained %s model for QoI: %s", self.model_type.value, qoi_name)
+                self.compressors_per_qoi[qoi_name], self.trained_models_per_qoi[qoi_name] = result
 
         if self.failed_qois:
             logger.warning(
@@ -328,31 +394,6 @@ class SurrogateFactory:
         search range is sized for raw pairwise distances accordingly.
         """
         return self.model_type == ModelType.NN
-
-    def _create_and_train_model(
-        self,
-        z_train: np.ndarray,
-        z_val: np.ndarray,
-    ) -> Any:
-        """Instantiate and train the appropriate model type."""
-        if self.model_type == ModelType.KRIGING:
-            model: Any = KrigingVectorModel()
-        elif self.model_type == ModelType.RBF:
-            model = RBFVectorModel()
-        elif self.model_type == ModelType.NN:
-            model = NeuralNetworkModel()
-        else:
-            raise ValueError(f"Unsupported model type: {self.model_type}")
-
-        if self._uses_scaled_features():
-            x_train, x_val = (
-                self.processed_data["X_train_scaled"],
-                self.processed_data["X_val_scaled"],
-            )
-        else:
-            x_train, x_val = self.processed_data["X_train_raw"], self.processed_data["X_val_raw"]
-        model.train(x_train, z_train, x_val, z_val)
-        return model
 
     def _decode_qoi(self, qoi_name: str, z_pred: np.ndarray) -> np.ndarray:
         """Map a latent prediction back to physical units.
@@ -673,8 +714,9 @@ class SurrogateFactory:
 
         By default only the artefacts needed for inference are stored, keeping
         ``model.pkl`` small and the served model lean.  Set *include_eval_data*
-        to also persist the held-out test arrays and reference data so the model
-        can be reloaded and re-evaluated/re-plotted without retraining.
+        to persist the full state instead (raw data, every split, reference
+        data), so the model can be reloaded, re-evaluated, re-plotted or
+        retrained.
         """
         file_path = Path(file_path)
         file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -700,6 +742,7 @@ class SurrogateFactory:
         return state
 
     def __setstate__(self, state: dict[str, Any]) -> None:
+        state.setdefault("n_jobs", 1)  # pickles saved before n_jobs existed
         self.__dict__.update(state)
         self._pickle_include_eval_data = False
 
